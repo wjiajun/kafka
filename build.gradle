@@ -19,6 +19,16 @@ import java.nio.charset.StandardCharsets
 
 buildscript {
   repositories {
+    //公共库
+    maven{
+      allowInsecureProtocol = true
+      url'http://maven.aliyun.com/nexus/content/groups/public/'
+    }
+    maven {url 'https://maven.aliyun.com/repository/public'}
+    //对应jcenter()
+    maven {url 'https://maven.aliyun.com/repository/jcenter'}
+    //对应google()
+    maven {url 'https://maven.aliyun.com/repository/google'}
     mavenCentral()
   }
   apply from: "$rootDir/gradle/dependencies.gradle"
@@ -54,6 +64,16 @@ spotless {
 allprojects {
 
   repositories {
+    maven{
+      allowInsecureProtocol = true
+      url 'http://maven.aliyun.com/nexus/content/groups/public/'
+    }
+    //公共库
+    maven {url 'https://maven.aliyun.com/repository/public'}
+    //对应jcenter()
+    maven {url 'https://maven.aliyun.com/repository/jcenter'}
+    //对应google()
+    maven {url 'https://maven.aliyun.com/repository/google'}
     mavenCentral()
   }
 
