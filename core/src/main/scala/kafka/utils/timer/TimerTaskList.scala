@@ -25,6 +25,7 @@ import org.apache.kafka.common.utils.Time
 import scala.math._
 
 @threadsafe
+// taskCounter: 用于标识当前这个链表中的总定时任务数
 private[timer] class TimerTaskList(taskCounter: AtomicInteger) extends Delayed {
 
   // TimerTaskList forms a doubly linked cyclic list using a dummy root entry
@@ -34,6 +35,7 @@ private[timer] class TimerTaskList(taskCounter: AtomicInteger) extends Delayed {
   root.next = root
   root.prev = root
 
+  // 表示这个链表所在 Bucket 的过期时间戳
   private[this] val expiration = new AtomicLong(-1L)
 
   // Set the bucket's expiration time
@@ -60,9 +62,11 @@ private[timer] class TimerTaskList(taskCounter: AtomicInteger) extends Delayed {
   }
 
   // Add a timer task entry to this list
+  // add方法
   def add(timerTaskEntry: TimerTaskEntry): Unit = {
     var done = false
     while (!done) {
+      // 在添加之前尝试移除该定时任务，保证该任务没有在其他链表中
       // Remove the timer task entry if it is already in any other list
       // We do this outside of the sync block below to avoid deadlocking.
       // We may retry until timerTaskEntry.list becomes null.
@@ -76,6 +80,7 @@ private[timer] class TimerTaskList(taskCounter: AtomicInteger) extends Delayed {
             timerTaskEntry.next = root
             timerTaskEntry.prev = tail
             timerTaskEntry.list = this
+            // 把timerTaskEntry添加到链表末尾
             tail.next = timerTaskEntry
             root.prev = timerTaskEntry
             taskCounter.incrementAndGet()
@@ -105,12 +110,18 @@ private[timer] class TimerTaskList(taskCounter: AtomicInteger) extends Delayed {
   // Remove all task entries and apply the supplied function to each of them
   def flush(f: TimerTaskEntry => Unit): Unit = {
     synchronized {
+      // 找到链表第一个元素
       var head = root.next
+      // 开始遍历链表
       while (head ne root) {
+        // 移除遍历到的链表元素
         remove(head)
+        // 执行传入参数f的逻辑
+        // 用户将高层次时间轮移动到低层次的时间轮上，如：1分5秒，1分走完了，就将该任务移到以秒为tick的时间轮层次中
         f(head)
         head = root.next
       }
+      // 清空过期时间设置
       expiration.set(-1L)
     }
   }
@@ -129,18 +140,20 @@ private[timer] class TimerTaskList(taskCounter: AtomicInteger) extends Delayed {
 private[timer] class TimerTaskEntry(val timerTask: TimerTask, val expirationMs: Long) extends Ordered[TimerTaskEntry] {
 
   @volatile
-  var list: TimerTaskList = null
-  var next: TimerTaskEntry = null
-  var prev: TimerTaskEntry = null
+  var list: TimerTaskList = null // 绑定的Bucket链表实例
+  var next: TimerTaskEntry = null // next指针
+  var prev: TimerTaskEntry = null // prev指针
 
   // if this timerTask is already held by an existing timer task entry,
   // setTimerTaskEntry will remove it.
+  // 关联给定的定时任务
   if (timerTask != null) timerTask.setTimerTaskEntry(this)
 
   def cancelled: Boolean = {
     timerTask.getTimerTaskEntry != this
   }
 
+  // 从Bucket链表中移除自己
   def remove(): Unit = {
     var currentList = list
     // If remove is called when another thread is moving the entry from a task entry list to another,

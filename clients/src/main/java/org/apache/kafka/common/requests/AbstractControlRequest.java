@@ -24,9 +24,9 @@ public abstract class AbstractControlRequest extends AbstractRequest {
     public static final long UNKNOWN_BROKER_EPOCH = -1L;
 
     public static abstract class Builder<T extends AbstractRequest> extends AbstractRequest.Builder<T> {
-        protected final int controllerId;
-        protected final int controllerEpoch;
-        protected final long brokerEpoch;
+        protected final int controllerId; // controller 所在的broker id
+        protected final int controllerEpoch; // controller 的版本信息
+        protected final long brokerEpoch; // 目前broker 的 epoch
 
         protected Builder(ApiKeys api, short version, int controllerId, int controllerEpoch, long brokerEpoch) {
             super(api, version);

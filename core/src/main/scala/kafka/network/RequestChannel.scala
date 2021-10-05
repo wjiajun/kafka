@@ -78,12 +78,12 @@ object RequestChannel extends Logging {
     }
   }
 
-  class Request(val processor: Int,
-                val context: RequestContext,
-                val startTimeNanos: Long,
-                val memoryPool: MemoryPool,
-                @volatile var buffer: ByteBuffer,
-                metrics: RequestChannel.Metrics,
+  class Request(val processor: Int,// 是 Processor 线程的序号，即这个请求是由哪个 Processor 线程接收处理的。
+                val context: RequestContext,// context 是用来标识请求上下文信息的
+                val startTimeNanos: Long,// 记录了 Request 对象被创建的时间，主要用于各种时间统计指标的计算
+                val memoryPool: MemoryPool, // 源码定义的一个非阻塞式的内存缓冲区，主要作用是避免 Request 对象无限使用内存
+                @volatile var buffer: ByteBuffer,// 真正保存 Request 对象内容的字节缓冲区
+                metrics: RequestChannel.Metrics,// metrics 是 Request 相关的各种监控指标的一个管理类
                 val envelope: Option[RequestChannel.Request] = None) extends BaseRequest {
     // These need to be volatile because the readers are in the network thread and the writers are in the request
     // handler threads or the purgatory threads
@@ -334,12 +334,12 @@ object RequestChannel extends Logging {
   }
 }
 
-class RequestChannel(val queueSize: Int,
+class RequestChannel(val queueSize: Int,//  queued.max.requests  Request 队列的最大长度
                      val metricNamePrefix: String,
                      time: Time,
                      val metrics: RequestChannel.Metrics) extends KafkaMetricsGroup {
   import RequestChannel._
-  private val requestQueue = new ArrayBlockingQueue[BaseRequest](queueSize)
+  private val requestQueue = new ArrayBlockingQueue[BaseRequest](queueSize)// 保存 Broker 接收到的各类请求
   private val processors = new ConcurrentHashMap[Int, Processor]()
   val requestQueueSizeMetricName = metricNamePrefix.concat(RequestQueueSizeMetric)
   val responseQueueSizeMetricName = metricNamePrefix.concat(ResponseQueueSizeMetric)
@@ -353,14 +353,17 @@ class RequestChannel(val queueSize: Int,
   })
 
   def addProcessor(processor: Processor): Unit = {
+    // 添加Processor到Processor线程池
     if (processors.putIfAbsent(processor.id, processor) != null)
       warn(s"Unexpected processor with processorId ${processor.id}")
 
     newGauge(responseQueueSizeMetricName, () => processor.responseQueueSize,
+      // 为给定Processor对象创建对应的监控指标
       Map(ProcessorMetricTag -> processor.id.toString))
   }
 
   def removeProcessor(processorId: Int): Unit = {
+    // 从Processor线程池中移除给定Processor线程
     processors.remove(processorId)
     removeMetric(responseQueueSizeMetricName, Map(ProcessorMetricTag -> processorId.toString))
   }
@@ -408,7 +411,7 @@ class RequestChannel(val queueSize: Int,
 
   /** Send a response back to the socket server to be sent over the network */
   private[network] def sendResponse(response: RequestChannel.Response): Unit = {
-    if (isTraceEnabled) {
+    if (isTraceEnabled) { // 构造Trace日志输出字符串
       val requestHeader = response.request.headerForLoggingOrThrottling()
       val message = response match {
         case sendResponse: SendResponse =>
@@ -437,9 +440,11 @@ class RequestChannel(val queueSize: Int,
       case _: StartThrottlingResponse | _: EndThrottlingResponse => ()
     }
 
+    // 找出response对应的Processor线程，即request当初是由哪个Processor线程处理的
     val processor = processors.get(response.processor)
     // The processor may be null if it was shutdown. In this case, the connections
     // are closed, so the response is dropped.
+    // 将response对象放置到对应Processor线程的Response队列中
     if (processor != null) {
       processor.enqueueResponse(response)
     }
@@ -476,11 +481,11 @@ object RequestMetrics {
   val consumerFetchMetricName = ApiKeys.FETCH.name + "Consumer"
   val followFetchMetricName = ApiKeys.FETCH.name + "Follower"
 
-  val RequestsPerSec = "RequestsPerSec"
-  val RequestQueueTimeMs = "RequestQueueTimeMs"
-  val LocalTimeMs = "LocalTimeMs"
-  val RemoteTimeMs = "RemoteTimeMs"
-  val ThrottleTimeMs = "ThrottleTimeMs"
+  val RequestsPerSec = "RequestsPerSec"// 每秒处理的 Request 数，用来评估 Broker 的繁忙状态
+  val RequestQueueTimeMs = "RequestQueueTimeMs"// 计算 Request 在 Request 队列中的平均等候时间，单位是毫秒。倘若 Request 在队列的等待时间过长，你通常需要增加后端 I/O 线程的数量，来加快队列中 Request 的拿取速度
+  val LocalTimeMs = "LocalTimeMs"// 计算 Request 实际被处理的时间，单位是毫秒
+  val RemoteTimeMs = "RemoteTimeMs"// Kafka 的读写请求（PRODUCE 请求和 FETCH 请求）逻辑涉及等待其他 Broker 操作的步骤。RemoteTimeMs 计算的，就是等待其他 Broker 完成指定逻辑的时间。因为等待的是其他 Broker，因此被称为 Remote Time。这个监控项非常重要！Kafka 生产环境中设置 acks=all 的 Producer 程序发送消息延时高的主要原因，往往就是 Remote Time 高。
+  val ThrottleTimeMs = "ThrottleTimeMs"// 计算 Request 被处理的完整流程时间。这是最实用的监控指标，没有之一！毕竟，我们通常都是根据 TotalTimeMs 来判断系统是否出现问题的。一旦发现了问题，我们才会利用前面的几个监控项进一步定位问题的原因。
   val ResponseQueueTimeMs = "ResponseQueueTimeMs"
   val ResponseSendTimeMs = "ResponseSendTimeMs"
   val TotalTimeMs = "TotalTimeMs"

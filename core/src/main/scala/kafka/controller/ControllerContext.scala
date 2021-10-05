@@ -73,26 +73,26 @@ case class ReplicaAssignment private (replicas: Seq[Int],
 }
 
 class ControllerContext {
-  val stats = new ControllerStats
-  var offlinePartitionCount = 0
+  val stats = new ControllerStats // Controller统计信息类
+  var offlinePartitionCount = 0 // 离线分区计数器，段统计集群中所有离线或处于不可用状态的主题分区数量
   var preferredReplicaImbalanceCount = 0
-  val shuttingDownBrokerIds = mutable.Set.empty[Int]
-  private val liveBrokers = mutable.Set.empty[Broker]
-  private val liveBrokerEpochs = mutable.Map.empty[Int, Long]
-  var epoch: Int = KafkaController.InitialControllerEpoch
-  var epochZkVersion: Int = KafkaController.InitialControllerEpochZkVersion
+  val shuttingDownBrokerIds = mutable.Set.empty[Int] // 关闭中Broker的Id列表
+  private val liveBrokers = mutable.Set.empty[Broker] // 当前运行中Broker对象列表
+  private val liveBrokerEpochs = mutable.Map.empty[Int, Long] // (Broker侧)运行中Broker
+  var epoch: Int = KafkaController.InitialControllerEpoch // ( Controller 侧)Controller当前Epoch， ZooKeeper 中 /controller_epoch 节点的值，可以认为就是 Controller 在整个 Kafka 集群的版本号
+  var epochZkVersion: Int = KafkaController.InitialControllerEpochZkVersion // ( Controller 侧)/controller_epoch 节点的 dataVersion 值。
 
-  val allTopics = mutable.Set.empty[String]
+  val allTopics = mutable.Set.empty[String]  // 集群主题列表
   var topicIds = mutable.Map.empty[String, Uuid]
   var topicNames = mutable.Map.empty[Uuid, String]
-  val partitionAssignments = mutable.Map.empty[String, mutable.Map[Int, ReplicaAssignment]]
+  val partitionAssignments = mutable.Map.empty[String, mutable.Map[Int, ReplicaAssignment]] // 存所有主题分区的副本分配情况
   private val partitionLeadershipInfo = mutable.Map.empty[TopicPartition, LeaderIsrAndControllerEpoch]
   val partitionsBeingReassigned = mutable.Set.empty[TopicPartition]
   val partitionStates = mutable.Map.empty[TopicPartition, PartitionState]
   val replicaStates = mutable.Map.empty[PartitionAndReplica, ReplicaState]
   val replicasOnOfflineDirs = mutable.Map.empty[Int, Set[TopicPartition]]
 
-  val topicsToBeDeleted = mutable.Set.empty[String]
+  val topicsToBeDeleted = mutable.Set.empty[String] // 待删除主题列表
 
   /** The following topicsWithDeletionStarted variable is used to properly update the offlinePartitionCount metric.
    * When a topic is going through deletion, we don't want to keep track of its partition state
@@ -113,8 +113,8 @@ class ControllerContext {
    * NonExistentPartition state. Once a topic is in the topicsWithDeletionStarted set, we will stop monitoring
    * its partition state changes in the offlinePartitionCount metric
    */
-  val topicsWithDeletionStarted = mutable.Set.empty[String]
-  val topicsIneligibleForDeletion = mutable.Set.empty[String]
+  val topicsWithDeletionStarted = mutable.Set.empty[String] // 已开启删除的主题列
+  val topicsIneligibleForDeletion = mutable.Set.empty[String]  // 暂时无法执行删
 
   private def clearTopicsState(): Unit = {
     allTopics.clear()
@@ -180,6 +180,7 @@ class ControllerContext {
     }.toMap
   }
 
+  // 获取某个 Broker 上的所有分区
   def allPartitions: Set[TopicPartition] = {
     partitionAssignments.flatMap {
       case (topic, topicReplicaAssignment) => topicReplicaAssignment.map {
@@ -221,6 +222,7 @@ class ControllerContext {
   def liveOrShuttingDownBroker(brokerId: Int): Option[Broker] = liveOrShuttingDownBrokers.find(_.id == brokerId)
 
   def partitionsOnBroker(brokerId: Int): Set[TopicPartition] = {
+    //  要获取某个 Broker 上的所有分区
     partitionAssignments.flatMap {
       case (topic, topicReplicaAssignment) => topicReplicaAssignment.filter {
         case (_, partitionAssignment) => partitionAssignment.replicas.contains(brokerId)
@@ -258,6 +260,7 @@ class ControllerContext {
   }
 
   def partitionsForTopic(topic: String): collection.Set[TopicPartition] = {
+    // 要获取某个主题的所有分区对象
     partitionAssignments.getOrElse(topic, mutable.Map.empty).map {
       case (partition, _) => new TopicPartition(topic, partition)
     }.toSet
@@ -389,13 +392,20 @@ class ControllerContext {
     updatePartitionStateMetrics(partition, currentState, targetState)
   }
 
+  // 更新offlinePartitionCount元数据
   private def updatePartitionStateMetrics(partition: TopicPartition,
                                           currentState: PartitionState,
                                           targetState: PartitionState): Unit = {
+    // 如果该主题当前并未处于删除中状态
     if (!isTopicDeletionInProgress(partition.topic)) {
+      // targetState表示该分区要变更到的状
+      // 如果当前状态不是OfflinePartition，即离线状态并且目标状态是离线状态
+      // 这个if语句判断是否要将该主题分区状态转换到离线状态
       if (currentState != OfflinePartition && targetState == OfflinePartition) {
         offlinePartitionCount = offlinePartitionCount + 1
       } else if (currentState == OfflinePartition && targetState != OfflinePartition) {
+        // 如果当前状态已经是离线状态，但targetState不是
+        // 这个else if语句判断是否要将该主题分区状态转换到非离线状态
         offlinePartitionCount = offlinePartitionCount - 1
       }
     }

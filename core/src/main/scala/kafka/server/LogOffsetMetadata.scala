@@ -38,9 +38,10 @@ object LogOffsetMetadata {
  *  2. the base message offset of the located segment
  *  3. the physical position on the located segment
  */
-case class LogOffsetMetadata(messageOffset: Long,
-                             segmentBaseOffset: Long = Log.UnknownOffset,
-                             relativePositionInSegment: Int = LogOffsetMetadata.UnknownFilePosition) {
+// 封装下一条待写入消息的位移值
+case class LogOffsetMetadata(messageOffset: Long, // 高水位值（消息位移值）
+                             segmentBaseOffset: Long = Log.UnknownOffset, // 保存该位移值所在日志段起始位移值
+                             relativePositionInSegment: Int = LogOffsetMetadata.UnknownFilePosition) {// 保存该位移值所在日志段的物理磁盘位置
 
   // check if this offset is already on an older segment compared with the given offset
   def onOlderSegment(that: LogOffsetMetadata): Boolean = {

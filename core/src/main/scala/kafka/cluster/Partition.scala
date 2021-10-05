@@ -505,6 +505,13 @@ class Partition(val topicPartition: TopicPartition,
    * Make the local replica the leader by resetting LogEndOffset for remote replicas (there could be old LogEndOffset
    * from the time when this broker was the leader last time) and setting the new leader and ISR.
    * If the leader replica id does not change, return false to indicate the replica manager.
+   * 该方法保存分区的 Leader 和 ISR 信息，同时创建必要的日志对象、重设远端 Follower 副本的 LEO值。
+   * 远端 Follower 副本 : 保存在 Leader 副本本地内存中的一组 Follower 副本集合
+   *
+   * ReplicaManager 在处理 FETCH 请求时（多一轮Fetch 请求），会更新 remoteReplicas 中副本对象的 LEO值。
+   * 同时，Leader 副本会将自己更新后的 LEO 值与 remoteReplicas 中副本的 LEO 值进行比较，来决定是否“抬高”高水位值。
+   *
+   * 重要步骤: 就是要重设这组远端 Follower 副本对象的 LEO 值。
    */
   def makeLeader(partitionState: LeaderAndIsrPartitionState,
                  highWatermarkCheckpoints: OffsetCheckpoints,
@@ -587,6 +594,11 @@ class Partition(val topicPartition: TopicPartition,
    *  If the leader replica id does not change and the new epoch is equal or one
    *  greater (that is, no updates have been missed), return false to indicate to the
    * replica manager that state is already correct and the become-follower steps can be skipped
+   *
+   * 1. 更新 Controller Epoch 值；
+   * 2. 保存副本列表（Assigned Replicas，AR）和清空 ISR；
+   * 3. 创建日志对象；
+   * 4. 重设 Leader 副本的 Broker ID。
    */
   def makeFollower(partitionState: LeaderAndIsrPartitionState,
                    highWatermarkCheckpoints: OffsetCheckpoints,
@@ -899,13 +911,18 @@ class Partition(val topicPartition: TopicPartition,
   private def tryCompleteDelayedRequests(): Unit = delayedOperations.checkAndCompleteAll()
 
   def maybeShrinkIsr(): Unit = {
+    // 判断是否需要执行ISR收缩
     val needsIsrUpdate = !isrState.isInflight && inReadLock(leaderIsrUpdateLock) {
       needsShrinkIsr()
     }
     val leaderHWIncremented = needsIsrUpdate && inWriteLock(leaderIsrUpdateLock) {
+      // 如果是Leader副本
       leaderLogIfLocal.exists { leaderLog =>
+        // 获取不同步的副本Id列表
         val outOfSyncReplicaIds = getOutOfSyncReplicas(replicaLagTimeMaxMs)
+        // 如果存在不同步的副本Id列表
         if (outOfSyncReplicaIds.nonEmpty) {
+          // 计算收缩之后的ISR列表
           val outOfSyncReplicaLog = outOfSyncReplicaIds.map { replicaId =>
             val logEndOffsetMessage = getReplica(replicaId)
               .map(_.logEndOffset.toString)
@@ -918,11 +935,14 @@ class Partition(val topicPartition: TopicPartition,
                s"endOffset: ${leaderLog.logEndOffset}). " +
                s"Out of sync replicas: $outOfSyncReplicaLog.")
 
+          // 更新ZooKeeper中分区的ISR数据以及Broker的元数据缓存中的数据
           shrinkIsr(outOfSyncReplicaIds)
 
           // we may need to increment high watermark since ISR could be down to 1
+          // 尝试更新Leader副本的高水位值
           maybeIncrementLeaderHW(leaderLog)
         } else {
+          // 如果不是Leader副本，什么都不做
           false
         }
       }
@@ -930,6 +950,7 @@ class Partition(val topicPartition: TopicPartition,
 
     // some delayed operations may be unblocked after HW changed
     if (leaderHWIncremented)
+    // 尝试解锁一下延迟请求
       tryCompleteDelayedRequests()
   }
 

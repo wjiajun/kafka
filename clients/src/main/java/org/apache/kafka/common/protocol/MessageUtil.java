@@ -207,12 +207,14 @@ public final class MessageUtil {
     }
 
     public static byte[] toVersionPrefixedBytes(final short version, final Message message) {
+        // 向Buffer依次写入版本信息和以上写入的元数据信息
         ByteBuffer buffer = toVersionPrefixedByteBuffer(version, message);
         // take the inner array directly if it is full with data
         if (buffer.hasArray() &&
                 buffer.arrayOffset() == 0 &&
                 buffer.position() == 0 &&
                 buffer.limit() == buffer.array().length) return buffer.array();
+            // 返回Buffer底层的字节数组
         else return Utils.toArray(buffer);
     }
 }

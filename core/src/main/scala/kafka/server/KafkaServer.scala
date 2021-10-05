@@ -288,7 +288,9 @@ class KafkaServer(
         //
         // Note that we allow the use of KRaft mode controller APIs when forwarding is enabled
         // so that the Envelope request is exposed. This is only used in testing currently.
+        // 创建SocketServer组件
         socketServer = new SocketServer(config, metrics, time, credentialProvider, apiVersionManager)
+        // 启动SocketServer，但不启动Processor线程
         socketServer.startup(startProcessingRequests = false)
 
         /* start replica manager */
@@ -414,6 +416,7 @@ class KafkaServer(
         dynamicConfigManager = new DynamicConfigManager(zkClient, dynamicConfigHandlers)
         dynamicConfigManager.startup()
 
+        // 启动Data plane和Control plane的所有线程
         socketServer.startProcessingRequests(authorizerFutures)
 
         brokerState = BrokerState.RUNNING

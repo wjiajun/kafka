@@ -113,6 +113,7 @@ class TimeIndex(_file: File, baseOffset: Long, maxIndexSize: Int = -1, writable:
   def maybeAppend(timestamp: Long, offset: Long, skipFullCheck: Boolean = false): Unit = {
     inLock(lock) {
       if (!skipFullCheck)
+        // 如果索引文件已写满，抛出异常
         require(!isFull, "Attempt to append to a full time index (size = " + _entries + ").")
       // We do not throw exception when the offset equals to the offset of last entry. That means we are trying
       // to insert the same time index entry as the last entry.
@@ -120,9 +121,11 @@ class TimeIndex(_file: File, baseOffset: Long, maxIndexSize: Int = -1, writable:
       // because that could happen in the following two scenarios:
       // 1. A log segment is closed.
       // 2. LogSegment.onBecomeInactiveSegment() is called when an active log segment is rolled.
+      // 确保索引单调增加性
       if (_entries != 0 && offset < lastEntry.offset)
         throw new InvalidOffsetException(s"Attempt to append an offset ($offset) to slot ${_entries} no larger than" +
           s" the last offset appended (${lastEntry.offset}) to ${file.getAbsolutePath}.")
+      // 确保时间戳的单调增加性
       if (_entries != 0 && timestamp < lastEntry.timestamp)
         throw new IllegalStateException(s"Attempt to append a timestamp ($timestamp) to slot ${_entries} no larger" +
           s" than the last timestamp appended (${lastEntry.timestamp}) to ${file.getAbsolutePath}.")
@@ -131,10 +134,10 @@ class TimeIndex(_file: File, baseOffset: Long, maxIndexSize: Int = -1, writable:
       // index will be empty.
       if (timestamp > lastEntry.timestamp) {
         trace(s"Adding index entry $timestamp => $offset to ${file.getAbsolutePath}.")
-        mmap.putLong(timestamp)
-        mmap.putInt(relativeOffset(offset))
-        _entries += 1
-        _lastEntry = TimestampOffset(timestamp, offset)
+        mmap.putLong(timestamp) // 向mmap写入时间戳
+        mmap.putInt(relativeOffset(offset)) // 向mmap写入相对位移值
+        _entries += 1 // 更新索引项个数
+        _lastEntry = TimestampOffset(timestamp, offset)// 更新当前最新的索引项
         require(_entries * entrySize == mmap.position(), s"${_entries} entries but file position in index is ${mmap.position()}.")
       }
     }

@@ -955,6 +955,7 @@ public class KafkaAdminClient extends AdminClient {
         /**
          * Calls which have not yet been assigned to a node.
          * Only accessed from this thread.
+         * 请求处理中队列
          */
         private final ArrayList<Call> pendingCalls = new ArrayList<>();
 

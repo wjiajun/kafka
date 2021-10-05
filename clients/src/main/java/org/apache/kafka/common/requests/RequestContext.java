@@ -44,13 +44,13 @@ public class RequestContext implements AuthorizableRequestContext {
     public final boolean fromPrivilegedListener;
     public final Optional<KafkaPrincipalSerde> principalSerde;
 
-    public RequestContext(RequestHeader header,
-                          String connectionId,
-                          InetAddress clientAddress,
-                          KafkaPrincipal principal,
-                          ListenerName listenerName,
-                          SecurityProtocol securityProtocol,
-                          ClientInformation clientInformation,
+    public RequestContext(RequestHeader header,// Request头部数据，主要是一些对用户不可见的元
+                          String connectionId, // Request发送方的TCP连接串标识，由Kafka根据一
+                          InetAddress clientAddress,// Request发送方IP地址
+                          KafkaPrincipal principal,// Kafka用户认证类，用于认证授权
+                          ListenerName listenerName, // 监听器名称，可以是预定义的监听器（如P
+                          SecurityProtocol securityProtocol, // 安全协议类型，目前支持4种
+                          ClientInformation clientInformation, // 用户自定义的一些连接方信息
                           boolean fromPrivilegedListener) {
         this(header,
             connectionId,
@@ -83,17 +83,27 @@ public class RequestContext implements AuthorizableRequestContext {
         this.principalSerde = principalSerde;
     }
 
+    /**
+     * 从给定的ByteBuffer中提取出Request和对应的Size值
+     *
+     * @param buffer
+     * @return
+     */
     public RequestAndSize parseRequest(ByteBuffer buffer) {
+        // 不支持的ApiVersions请求类型被视为是V0版本的请求，并且不做解析操作，直接返回
         if (isUnsupportedApiVersionsRequest()) {
             // Unsupported ApiVersion requests are treated as v0 requests and are not parsed
             ApiVersionsRequest apiVersionsRequest = new ApiVersionsRequest(new ApiVersionsRequestData(), (short) 0, header.apiVersion());
             return new RequestAndSize(apiVersionsRequest, 0);
         } else {
+            // 从请求头部数据中获取ApiKeys信息
             ApiKeys apiKey = header.apiKey();
             try {
                 short apiVersion = header.apiVersion();
+                // 封装解析后的请求对象以及请求大小返回
                 return AbstractRequest.parseRequest(apiKey, apiVersion, buffer);
             } catch (Throwable ex) {
+                // 解析过程中出现任何问题都视为无效请求，抛出异常
                 throw new InvalidRequestException("Error getting request for apiKey: " + apiKey +
                         ", apiVersion: " + header.apiVersion() +
                         ", connectionId: " + connectionId +

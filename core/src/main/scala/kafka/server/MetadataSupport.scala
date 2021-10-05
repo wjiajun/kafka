@@ -63,9 +63,9 @@ sealed trait MetadataSupport {
   def controllerId: Option[Int]
 }
 
-case class ZkSupport(adminManager: ZkAdminManager,
-                     controller: KafkaController,
-                     zkClient: KafkaZkClient,
+case class ZkSupport(adminManager: ZkAdminManager, // 主题、分区、配置等方面的管理器
+                     controller: KafkaController,// 控制器组件
+                     zkClient: KafkaZkClient,// ZooKeeper客户端程序，Kafka依赖于该类实现与ZooKeeper通信
                      forwardingManager: Option[ForwardingManager],
                      metadataCache: ZkMetadataCache) extends MetadataSupport {
   val adminZkClient = new AdminZkClient(zkClient)

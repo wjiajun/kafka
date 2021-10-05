@@ -64,7 +64,7 @@ class LocalLog(@volatile private var _dir: File,
                @volatile private[log] var config: LogConfig,
                private[log] val segments: LogSegments,
                @volatile private[log] var recoveryPoint: Long,
-               @volatile private var nextOffsetMetadata: LogOffsetMetadata,
+               @volatile private var nextOffsetMetadata: LogOffsetMetadata,// 下一条待插入消息的位移值
                private[log] val scheduler: Scheduler,
                private[log] val time: Time,
                private[log] val topicPartition: TopicPartition,
@@ -193,6 +193,13 @@ class LocalLog(@volatile private var _dir: File,
    * Update end offset of the log, and update the recoveryPoint.
    *
    * @param endOffset the new end offset of the log
+   *
+   * 更新时机：
+   *  1.Log 对象初始化时：当 Log 对象初始化时，我们必须要创建一个 LEO 对象，并对其进行初始化。
+   *  2.写入新消息时：这个最容易理解。以上面的图为例，当不断向 Log 对象插入新消息时，LEO 值就像一个指针一样，需要不停地向右移动，也就是不断地增加。
+   *  3.Log 对象发生日志切分（Log Roll）时：日志切分是啥呢？其实就是创建一个全新的日志段对象，并且关闭当前写入的日志段对象。这通常发生在当前日志段对象已满的时候。
+   *    一旦发生日志切分，说明 Log 对象切换了 Active Segment，那么，LEO 中的起始位移值和段大小数据都要被更新，因此，在进行这一步操作时，我们必须要更新 LEO 对象。
+   *  4.
    */
   private[log] def updateLogEndOffset(endOffset: Long): Unit = {
     nextOffsetMetadata = LogOffsetMetadata(endOffset, segments.activeSegment.baseOffset, segments.activeSegment.size)
@@ -257,12 +264,18 @@ class LocalLog(@volatile private var _dir: File,
    * @return the segments ready to be deleted
    */
   private[log] def deletableSegments(predicate: (LogSegment, Option[LogSegment]) => Boolean): Iterable[LogSegment] = {
-    if (segments.isEmpty) {
+    if (segments.isEmpty) { // 如果当前压根就没有任何日志段对象，直接返回
       Seq.empty
     } else {
       val deletable = ArrayBuffer.empty[LogSegment]
       val segmentsIterator = segments.values.iterator
       var segmentOpt = nextOption(segmentsIterator)
+      // 从具有最小起始位移值的日志段对象开始遍历，直到满足以下条件之一便停止遍历：
+      // 1. 测定条件函数predicate = false
+      // 2. 扫描到包含Log对象高水位值所在的日志段对象
+      // 3. 最新的日志段对象不包含任何消息
+      // 最新日志段对象是segments中Key值最大对应的那个日志段，也就是我们常说的Active Segme
+      // 在遍历过程中，同时不满足以上3个条件的所有日志段都是可以被删除的！
       while (segmentOpt.isDefined) {
         val segment = segmentOpt.get
         val nextSegmentOpt = nextOption(segmentsIterator)
@@ -344,24 +357,33 @@ class LocalLog(@volatile private var _dir: File,
       trace(s"Reading maximum $maxLength bytes at offset $startOffset from log with " +
         s"total length ${segments.sizeInBytes} bytes")
 
+      // 读取消息时没有使用Monitor锁同步机制，因此这里取巧了，用本地变量的方式把LEO对象保存
       val endOffsetMetadata = nextOffsetMetadata
       val endOffset = endOffsetMetadata.messageOffset
+      // 找到startOffset值所在的日志段对象。注意要使用floorEntry方法
       var segmentOpt = segments.floorSegment(startOffset)
 
       // return error on attempt to read beyond the log end offset
+      // 满足以下条件之一将被视为消息越界，即你要读取的消息不在该Log对象中：
+      // 1. 要读取的消息位移超过了LEO值
+      // 2. 没找到对应的日志段对象
+      // 3. 要读取的消息在Log Start Offset之下，同样是对外不可见的消息
       if (startOffset > endOffset || segmentOpt.isEmpty)
         throw new OffsetOutOfRangeException(s"Received request for offset $startOffset for partition $topicPartition, " +
           s"but we only have log segments upto $endOffset.")
 
+      // 如果从LEO处开始读取，那么自然不会返回任何数据
       if (startOffset == maxOffsetMetadata.messageOffset)
         emptyFetchDataInfo(maxOffsetMetadata, includeAbortedTxns)
       else if (startOffset > maxOffsetMetadata.messageOffset)
+      // 如果要读取的起始位置超过了能读取的最大位置，返回空的消息集合，因为没法读取任何消息
         emptyFetchDataInfo(convertToOffsetMetadataOrThrow(startOffset), includeAbortedTxns)
       else {
         // Do the read on the segment with a base offset less than the target offset
         // but if that segment doesn't contain any messages with an offset greater than that
         // continue to read from successive segments until we get some messages or we reach the end of the log
         var fetchDataInfo: FetchDataInfo = null
+        // 开始遍历日志段对象，直到读出东西来或者读到日志末尾
         while (fetchDataInfo == null && segmentOpt.isDefined) {
           val segment = segmentOpt.get
           val baseOffset = segment.baseOffset
@@ -371,11 +393,12 @@ class LocalLog(@volatile private var _dir: File,
             if (maxOffsetMetadata.segmentBaseOffset == segment.baseOffset) maxOffsetMetadata.relativePositionInSegment
             else segment.size
 
+          // 调用日志段对象的read方法执行真正的读取消息操作
           fetchDataInfo = segment.read(startOffset, maxLength, maxPosition, minOneMessage)
-          if (fetchDataInfo != null) {
+          if (fetchDataInfo != null) { // 如果没有返回任何消息，去下一个日志段对象试试
             if (includeAbortedTxns)
               fetchDataInfo = addAbortedTransactions(startOffset, segment, fetchDataInfo)
-          } else segmentOpt = segments.higherSegment(baseOffset)
+          } else segmentOpt = segments.higherSegment(baseOffset)  // 否则返回
         }
 
         if (fetchDataInfo != null) fetchDataInfo
@@ -383,6 +406,7 @@ class LocalLog(@volatile private var _dir: File,
           // okay we are beyond the end of the last segment with no data fetched although the start offset is in range,
           // this can happen when all messages with offset larger than start offsets have been deleted.
           // In this case, we will return the empty set with log end offset metadata
+          // 已经读到日志末尾还是没有数据返回，只能返回空消息集合
           FetchDataInfo(nextOffsetMetadata, MemoryRecords.EMPTY)
         }
       }

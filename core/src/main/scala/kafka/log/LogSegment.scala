@@ -52,13 +52,13 @@ import scala.math._
  * @param time The time instance
  */
 @nonthreadsafe
-class LogSegment private[log] (val log: FileRecords,
-                               val lazyOffsetIndex: LazyIndex[OffsetIndex],
-                               val lazyTimeIndex: LazyIndex[TimeIndex],
-                               val txnIndex: TransactionIndex,
+class LogSegment private[log] (val log: FileRecords,//Kafka 消息的对象
+                               val lazyOffsetIndex: LazyIndex[OffsetIndex], // 位移索引文件
+                               val lazyTimeIndex: LazyIndex[TimeIndex],// 时间戳索引文件
+                               val txnIndex: TransactionIndex, // 已中止事务索引文件
                                val baseOffset: Long,
-                               val indexIntervalBytes: Int,
-                               val rollJitterMs: Long,
+                               val indexIntervalBytes: Int,// 控制了日志段对象新增索引项的频率
+                               val rollJitterMs: Long,// 日志段对象新增倒计时的“扰动值”，每个新增日志段在创建时会彼此岔开一小段时间，这样可以缓解物理磁盘的 I/O 负载瓶颈
                                val time: Time) extends Logging {
 
   def offsetIndex: OffsetIndex = lazyOffsetIndex.get
@@ -141,10 +141,10 @@ class LogSegment private[log] (val log: FileRecords,
    * @throws LogSegmentOffsetOverflowException if the largest offset causes index offset overflow
    */
   @nonthreadsafe
-  def append(largestOffset: Long,
-             largestTimestamp: Long,
-             shallowOffsetOfMaxTimestamp: Long,
-             records: MemoryRecords): Unit = {
+  def append(largestOffset: Long,// 最大位移
+             largestTimestamp: Long,// 最大时间戳
+             shallowOffsetOfMaxTimestamp: Long,// 最大时间戳对应消息的位移
+             records: MemoryRecords): Unit = {// 真正要写入的消息集合
     if (records.sizeInBytes > 0) {
       trace(s"Inserting ${records.sizeInBytes} bytes at end offset $largestOffset at position ${log.sizeInBytes} " +
             s"with largest timestamp $largestTimestamp at shallow offset $shallowOffsetOfMaxTimestamp")
@@ -155,13 +155,16 @@ class LogSegment private[log] (val log: FileRecords,
       ensureOffsetInRange(largestOffset)
 
       // append the messages
-      val appendedBytes = log.append(records)
+      val appendedBytes = log.append(records)// 将内存中的消息对象写入到操作系统的页缓存
       trace(s"Appended $appendedBytes to ${log.file} at end offset $largestOffset")
       // Update the in memory max timestamp and corresponding offset.
+      // 更新日志段的最大时间戳以及最大时间戳所属消息的位移值属性,时间戳索引项保存时间戳与消息位移的对应关系，用于 Broker 端提供定期删除日志的功能
       if (largestTimestamp > maxTimestampSoFar) {
         maxTimestampAndOffsetSoFar = TimestampOffset(largestTimestamp, shallowOffsetOfMaxTimestamp)
       }
       // append an entry to the index (if needed)
+      // 时间戳索引项保存时间戳与消息位移的对应关系
+      // 日志段每写入4KB 数据就要写入一个索引项。当已写入字节数超过了 4KB 之后，append 方法会调用索引对象的 append 方法新增索引项，同时清空已写入字节数
       if (bytesSinceLastIndexEntry > indexIntervalBytes) {
         offsetIndex.append(largestOffset, physicalPosition)
         timeIndex.maybeAppend(maxTimestampSoFar, offsetOfMaxTimestampSoFar)
@@ -287,14 +290,14 @@ class LogSegment private[log] (val log: FileRecords,
    *         or null if the startOffset is larger than the largest offset in this log
    */
   @threadsafe
-  def read(startOffset: Long,
-           maxSize: Int,
-           maxPosition: Long = size,
-           minOneMessage: Boolean = false): FetchDataInfo = {
+  def read(startOffset: Long,// 要读取的第一条消息的位移
+           maxSize: Int,// 能读取的最大字节数
+           maxPosition: Long = size,// 能读到的最大文件位置
+           minOneMessage: Boolean = false): FetchDataInfo = { // 是否允许在消息体过大时至少返回第一条消息
     if (maxSize < 0)
       throw new IllegalArgumentException(s"Invalid max size $maxSize for log read from segment $log")
 
-    val startOffsetAndSize = translateOffset(startOffset)
+    val startOffsetAndSize = translateOffset(startOffset) // 定位要读取的起始文件位置, 根据索引信息找到对应的物理文件位置才能开始读取消息。
 
     // if the start position is already off the end of the log, return null
     if (startOffsetAndSize == null)
@@ -314,7 +317,7 @@ class LogSegment private[log] (val log: FileRecords,
     // calculate the length of the message set to read based on whether or not they gave us a maxOffset
     val fetchSize: Int = min((maxPosition - startPosition).toInt, adjustedMaxSize)
 
-    FetchDataInfo(offsetMetadata, log.slice(startPosition, fetchSize),
+    FetchDataInfo(offsetMetadata, log.slice(startPosition, fetchSize), // 从指定位置读取指定大小的消息集合
       firstEntryIncomplete = adjustedMaxSize < startOffsetAndSize.size)
   }
 
@@ -331,6 +334,7 @@ class LogSegment private[log] (val log: FileRecords,
    * @return The number of bytes truncated from the log
    * @throws LogSegmentOffsetOverflowException if the log segment contains an offset that causes the index offset to overflow
    */
+    // Broker 在启动时会从磁盘上加载所有日志段信息到内存中，并创建相应的 LogSegment 对象实例。
   @nonthreadsafe
   def recover(producerStateManager: ProducerStateManager, leaderEpochCache: Option[LeaderEpochFileCache] = None): Int = {
     offsetIndex.reset()
@@ -341,9 +345,12 @@ class LogSegment private[log] (val log: FileRecords,
     maxTimestampAndOffsetSoFar = TimestampOffset.Unknown
     try {
       for (batch <- log.batches.asScala) {
+        // 1. 该集合中的消息必须要符合 Kafka 定义的二进制格式；
+        // 2. 该集合中最后一条消息的位移值不能越界，即它与日志段起始位移的差值必须是一个正整数值。
         batch.ensureValid()
         ensureOffsetInRange(batch.lastOffset)
 
+        // 更新的最大时间戳以及所属消息的位移值
         // The max timestamp is exposed at the batch level, so no need to iterate the records
         if (batch.maxTimestamp > maxTimestampSoFar) {
           maxTimestampAndOffsetSoFar = TimestampOffset(batch.maxTimestamp, batch.lastOffset)
@@ -355,6 +362,7 @@ class LogSegment private[log] (val log: FileRecords,
           timeIndex.maybeAppend(maxTimestampSoFar, offsetOfMaxTimestampSoFar)
           lastIndexEntry = validBytes
         }
+        // 不断累加当前已读取的消息字节数
         validBytes += batch.sizeInBytes()
 
         if (batch.magic >= RecordBatch.MAGIC_VALUE_V2) {
@@ -371,8 +379,11 @@ class LogSegment private[log] (val log: FileRecords,
           .format(log.file.getAbsolutePath, validBytes, e.getMessage, e.getCause))
     }
     val truncated = log.sizeInBytes - validBytes
-    if (truncated > 0)
+    if (truncated > 0) {
+      // 会将日志段当前总字节数和刚刚累加的已读取字节数进行比较，如
+      // 果发现前者比后者大，说明日志段写入了一些非法消息，需要执行截断操作，将日志段大小调整回合法的数值
       debug(s"Truncated $truncated invalid bytes at the end of segment ${log.file.getAbsoluteFile} during recovery")
+    }
 
     log.truncateTo(validBytes)
     offsetIndex.trimToValidSize()

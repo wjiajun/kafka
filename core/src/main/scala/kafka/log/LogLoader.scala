@@ -102,6 +102,7 @@ object LogLoader extends Logging {
   def load(params: LoadLogParams): LoadedLogOffsets = {
     // First pass: through the files in the log directory and remove any temporary files
     // and find any interrupted swap operations
+    // 移除上次 Failure 遗留下来的各种临时文件
     val swapFiles = removeTempFilesAndCollectSwapFiles(params)
 
     // The remaining valid swap files must come from compaction or segment split operation. We can
@@ -111,8 +112,10 @@ object LogLoader extends Logging {
     // We store segments that require renaming in this code block, and do the actual renaming later.
     var minSwapFileOffset = Long.MaxValue
     var maxSwapFileOffset = Long.MinValue
+    // 遍历所有有效.swap文件
     swapFiles.filter(f => Log.isLogFile(new File(CoreUtils.replaceSuffix(f.getPath, SwapFileSuffix, "")))).foreach { f =>
-      val baseOffset = offsetFromFile(f)
+      val baseOffset = offsetFromFile(f)// 拿到日志文件的起始位移值
+      // 创建对应的LogSegment实例
       val segment = LogSegment.open(f.getParentFile,
         baseOffset = baseOffset,
         params.config,
@@ -159,12 +162,14 @@ object LogLoader extends Logging {
       // call to loadSegmentFiles().
       params.segments.close()
       params.segments.clear()
+      // 重建日志段 segments Map
       loadSegmentFiles(params)
     })
 
     val (newRecoveryPoint: Long, nextOffset: Long) = {
       if (!params.dir.getAbsolutePath.endsWith(Log.DeleteDirSuffix)) {
         val (newRecoveryPoint, nextOffset) = retryOnOffsetOverflow(params, {
+          // 恢复日志段对象
           recoverLog(params)
         })
 
@@ -208,6 +213,7 @@ object LogLoader extends Logging {
       params.time,
       reloadFromCleanShutdown = params.hadCleanShutdown,
       params.logIdentifier)
+    // 更新上次恢复点属性，并返回
     val activeSegment = params.segments.lastSegment.get
     LoadedLogOffsets(
       newLogStartOffset,
@@ -226,28 +232,31 @@ object LogLoader extends Logging {
    */
   private def removeTempFilesAndCollectSwapFiles(params: LoadLogParams): Set[File] = {
 
+    // 在方法内部定义一个名为deleteIndicesIfExist的方法，用于删除日志文件对应的索引文件
     val swapFiles = mutable.Set[File]()
     val cleanedFiles = mutable.Set[File]()
     var minCleanedFileOffset = Long.MaxValue
 
+    // 遍历分区日志路径下的所有文件
     for (file <- params.dir.listFiles if file.isFile) {
-      if (!file.canRead)
+      if (!file.canRead) // 如果不可读，直接抛出IOException
         throw new IOException(s"Could not read file $file")
       val filename = file.getName
-      if (filename.endsWith(DeletedFileSuffix)) {
+      if (filename.endsWith(DeletedFileSuffix)) { // 如果以.deleted结尾
         debug(s"${params.logIdentifier}Deleting stray temporary file ${file.getAbsolutePath}")
-        Files.deleteIfExists(file.toPath)
-      } else if (filename.endsWith(CleanedFileSuffix)) {
+        Files.deleteIfExists(file.toPath) // 说明是上次Failure遗留下来的文件，直接删除
+      } else if (filename.endsWith(CleanedFileSuffix)) { // 如果以.cleaned结尾
         minCleanedFileOffset = Math.min(offsetFromFile(file), minCleanedFileOffset)
         cleanedFiles += file
-      } else if (filename.endsWith(SwapFileSuffix)) {
-        swapFiles += file
+      } else if (filename.endsWith(SwapFileSuffix)) { // 如果以.swap结尾
+        swapFiles += file // 加入待恢复的.swap文件集合中
       }
     }
 
     // KAFKA-6264: Delete all .swap files whose base offset is greater than the minimum .cleaned segment offset. Such .swap
     // files could be part of an incomplete split operation that could not complete. See Log#splitOverflowedSegment
     // for more details about the split operation.
+    // 从待恢复swap集合中找出那些起始位移值大于minCleanedFileOffset值的文件，直接删掉这些文件
     val (invalidSwapFiles, validSwapFiles) = swapFiles.partition(file => offsetFromFile(file) >= minCleanedFileOffset)
     invalidSwapFiles.foreach { file =>
       debug(s"${params.logIdentifier}Deleting invalid swap file ${file.getAbsoluteFile} minCleanedFileOffset: $minCleanedFileOffset")
@@ -255,11 +264,13 @@ object LogLoader extends Logging {
     }
 
     // Now that we have deleted all .swap files that constitute an incomplete split operation, let's delete all .clean files
+    // 清除所有待删除文件集合中的文件
     cleanedFiles.foreach { file =>
       debug(s"${params.logIdentifier}Deleting stray .clean file ${file.getAbsolutePath}")
       Files.deleteIfExists(file.toPath)
     }
 
+    // 最后返回当前有效的.swap文件集合
     validSwapFiles
   }
 
@@ -310,19 +321,21 @@ object LogLoader extends Logging {
   private def loadSegmentFiles(params: LoadLogParams): Unit = {
     // load segments in ascending order because transactional data from one segment may depend on the
     // segments that come before it
+    // 按照日志段文件名中的位移值正序排列，然后遍历每个文件
     for (file <- params.dir.listFiles.sortBy(_.getName) if file.isFile) {
-      if (isIndexFile(file)) {
+      if (isIndexFile(file)) { // 如果原来是索引文件
         // if it is an index file, make sure it has a corresponding .log file
         val offset = offsetFromFile(file)
         val logFile = Log.logFile(params.dir, offset)
-        if (!logFile.exists) {
+        if (!logFile.exists) { // 确保存在对应的日志文件，否则记录一个警告，并删除该索引文件
           warn(s"${params.logIdentifier}Found an orphaned index file ${file.getAbsolutePath}, with no corresponding log file.")
-          Files.deleteIfExists(file.toPath)
+          Files.deleteIfExists(file.toPath) // 删除原来的索引文件
         }
-      } else if (isLogFile(file)) {
+      } else if (isLogFile(file)) {// 如果原来是日志文件
         // if it's a log file, load the corresponding log segment
         val baseOffset = offsetFromFile(file)
         val timeIndexFileNewlyCreated = !Log.timeIndexFile(params.dir, baseOffset).exists()
+        // 创建对应的LogSegment对象实例，并加入segments中
         val segment = LogSegment.open(
           dir = params.dir,
           baseOffset = baseOffset,
@@ -402,6 +415,7 @@ object LogLoader extends Logging {
         if (logEndOffset >= params.logStartOffsetCheckpoint)
           Some(logEndOffset)
         else {
+          // 验证分区日志的LEO值不能小于logStartOffsetCheckpoint
           warn(s"${params.logIdentifier}Deleting all segments because logEndOffset ($logEndOffset) " +
             s" smaller than logStartOffset ${params.logStartOffsetCheckpoint}." +
             " This could happen if segment files were deleted from the file system.")
@@ -414,15 +428,19 @@ object LogLoader extends Logging {
     }
 
     // If we have the clean shutdown marker, skip recovery.
+    // 如果不存在以.kafka_cleanshutdown结尾的文件。通常都不存在
     if (!params.hadCleanShutdown) {
+      // 获取到上次恢复点以外的所有unflushed日志段对象
       val unflushed = params.segments.values(params.recoveryPointCheckpoint, Long.MaxValue).iterator
       var truncated = false
 
+      // 遍历这些unflushed日志段
       while (unflushed.hasNext && !truncated) {
         val segment = unflushed.next()
         info(s"${params.logIdentifier}Recovering unflushed segment ${segment.baseOffset}")
         val truncatedBytes =
           try {
+            // 执行日志段恢复操作
             recoverSegment(segment, params)
           } catch {
             case _: InvalidOffsetException =>
@@ -431,7 +449,7 @@ object LogLoader extends Logging {
                 s" corrupt segment and creating an empty one with starting offset $startOffset")
               segment.truncateTo(startOffset)
           }
-        if (truncatedBytes > 0) {
+        if (truncatedBytes > 0) {// 如果有无效的消息导致被截断的字节数不为0，直接删除
           // we had an invalid message, delete all remaining log
           warn(s"${params.logIdentifier}Corruption found in segment ${segment.baseOffset}," +
             s" truncating to offset ${segment.readNextOffset}")
@@ -443,8 +461,10 @@ object LogLoader extends Logging {
 
     val logEndOffsetOption = deleteSegmentsIfLogStartGreaterThanLogEnd()
 
+    // 这些都做完之后，如果日志段集合为空了
     if (params.segments.isEmpty) {
       // no existing segments, create a new mutable segment beginning at logStartOffset
+      // 至少创建一个新的日志段，以logStartOffset为日志段的起始位移，并加入日志段集合中
       params.segments.add(
         LogSegment.open(
           dir = params.dir,

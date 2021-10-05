@@ -58,6 +58,7 @@ public class PartitionStates<S> {
             map.put(topicPartition, state);
     }
 
+    // 读取后为了确保公平性，将其移到分区列表的最后一位
     public void updateAndMoveToEnd(TopicPartition topicPartition, S state) {
         map.remove(topicPartition);
         map.put(topicPartition, state);

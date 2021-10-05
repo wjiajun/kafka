@@ -87,8 +87,11 @@ class OffsetIndex(_file: File, baseOffset: Long, maxIndexSize: Int = -1, writabl
    */
   def lookup(targetOffset: Long): OffsetPosition = {
     maybeLock(lock) {
-      val idx = mmap.duplicate
+      val idx = mmap.duplicate // 使用私有变量复制出整个索引映射区
+      // largestLowerBoundSlotFor方法底层使用了改进版的二分查找算法寻找对应的槽
       val slot = largestLowerBoundSlotFor(idx, targetOffset, IndexSearchType.KEY)
+      // 如果没找到，返回一个空的位置，即物理文件位置从0开始，表示从头读日志文件
+      // 否则返回slot槽对应的索引项
       if(slot == -1)
         OffsetPosition(baseOffset, 0)
       else
@@ -112,10 +115,26 @@ class OffsetIndex(_file: File, baseOffset: Long, maxIndexSize: Int = -1, writabl
     }
   }
 
+  /**
+   * 返回相对位移值
+   *
+   * @param buffer
+   * @param n
+   * @return
+   */
   private def relativeOffset(buffer: ByteBuffer, n: Int): Int = buffer.getInt(n * entrySize)
 
+  /**
+   * 返回物理位移值
+   *
+   * @param buffer
+   * @param n
+   * @return
+   */
   private def physical(buffer: ByteBuffer, n: Int): Int = buffer.getInt(n * entrySize + 4)
 
+  // “n”表示要查找给定 ByteBuffer 中保存的第 n 个索引项
+  // Key 就是之前说的位移值，而 Value 就是物理磁盘位置值
   override protected def parseEntry(buffer: ByteBuffer, n: Int): OffsetPosition = {
     OffsetPosition(baseOffset + relativeOffset(buffer, n), physical(buffer, n))
   }
@@ -140,15 +159,22 @@ class OffsetIndex(_file: File, baseOffset: Long, maxIndexSize: Int = -1, writabl
    */
   def append(offset: Long, position: Int): Unit = {
     inLock(lock) {
+      // 第1步：判断索引文件未写满
       require(!isFull, "Attempt to append to a full index (size = " + _entries + ").")
+      // 第2步：必须满足以下条件之一才允许写入索引项：
+      // 条件1：当前索引文件为空
+      // 条件2：要写入的位移大于当前所有已写入的索引项的位移——Kafka规定索引项中的位移值
       if (_entries == 0 || offset > _lastOffset) {
         trace(s"Adding index entry $offset => $position to ${file.getAbsolutePath}")
-        mmap.putInt(relativeOffset(offset))
-        mmap.putInt(position)
+        mmap.putInt(relativeOffset(offset))// 第3步A：向mmap中写入相对位移值
+        mmap.putInt(position) // 第3步B：向mmap中写入物理位置信息
+        // 第4步：更新其他元数据统计信息，如当前索引项计数器_entries和当前索引项最新位
         _entries += 1
         _lastOffset = offset
+        // 第5步：执行校验。写入的索引项格式必须符合要求，即索引项个数*单个索引项占用字
         require(_entries * entrySize == mmap.position(), s"$entries entries but file position in index is ${mmap.position()}.")
       } else {
+        // 如果第2步中两个条件都不满足，不能执行写入索引项操作，抛出异常
         throw new InvalidOffsetException(s"Attempt to append an offset ($offset) to position $entries no larger than" +
           s" the last offset appended (${_lastOffset}) to ${file.getAbsolutePath}.")
       }
@@ -180,6 +206,7 @@ class OffsetIndex(_file: File, baseOffset: Long, maxIndexSize: Int = -1, writabl
 
   /**
    * Truncates index to a known number of entries.
+   * 将索引文件内容直接裁剪掉一部分
    */
   private def truncateToEntries(entries: Int): Unit = {
     inLock(lock) {

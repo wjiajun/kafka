@@ -32,6 +32,7 @@ import scala.jdk.CollectionConverters._
  * @param topicPartition the TopicPartition associated with the segments
  *                        (useful for logging purposes)
  */
+// 分区日志下所有的日志段信息
 class LogSegments(topicPartition: TopicPartition) {
 
   /* the segments of the log with key being LogSegment base offset and value being a LogSegment */
