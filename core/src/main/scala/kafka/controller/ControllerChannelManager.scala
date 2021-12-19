@@ -216,7 +216,7 @@ class ControllerChannelManager(controllerContext: ControllerContext,
     // 创建该Broker专属的ControllerBrokerStateInfo实例
     // 并将其加入到brokerStateInfo统一管理
     brokerStateInfo.put(broker.id, ControllerBrokerStateInfo(networkClient, brokerNode, messageQueue,
-      x, queueSizeGauge, requestRateAndQueueTimeMetrics, reconfigurableChannelBuilder))
+      requestThread, queueSizeGauge, requestRateAndQueueTimeMetrics, reconfigurableChannelBuilder))
   }
 
   private def brokerMetricTags(brokerId: Int) = Map("broker-id" -> brokerId.toString)

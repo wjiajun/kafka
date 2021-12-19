@@ -48,7 +48,7 @@ import scala.math.max
  * used by its callback.  The delayed callback may acquire the group lock
  * since the delayed operation is completed only if the group lock can be acquired.
  */
-class handleJoinGroupGroupCoordinator(val brokerId: Int,
+class GroupCoordinator(val brokerId: Int,
                        val groupConfig: GroupConfig,
                        val offsetConfig: OffsetConfig,
                        val groupManager: GroupMetadataManager,
@@ -659,11 +659,11 @@ class handleJoinGroupGroupCoordinator(val brokerId: Int,
           case Stable =>
             removePendingSyncMember(group, memberId)
 
-            // 封装组协议类型、分配策略、成员分配方案，调用回调函数返回
-            responseCallback(SyncGroupResult(group.protocolType, group.protocolName, memberMetadata.assignment, Errors.NONE))
             // 获取消费者组成员元数据
             // if the group is stable, we just return the current assignment
             val memberMetadata = group.get(memberId)
+            // 封装组协议类型、分配策略、成员分配方案，调用回调函数返回
+            responseCallback(SyncGroupResult(group.protocolType, group.protocolName, memberMetadata.assignment, Errors.NONE))
             // 设定成员下次心跳时间
             completeAndScheduleNextHeartbeatExpiration(group, group.get(memberId))
 

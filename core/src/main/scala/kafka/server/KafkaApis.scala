@@ -1210,6 +1210,7 @@ class KafkaApis(val requestChannel: RequestChannel, // 请求通道
       }
     }
 
+    // 计算需要获取哪些主题的元数据
     val topics = if (metadataRequest.isAllTopics)
       metadataCache.getAllTopics()
     else
@@ -1252,6 +1253,7 @@ class KafkaApis(val requestChannel: RequestChannel, // 请求通道
     val errorUnavailableListeners = requestVersion >= 6
 
     val allowAutoCreation = config.autoCreateTopicsEnable && metadataRequest.allowAutoTopicCreation && !metadataRequest.isAllTopics
+    // 从元数据缓存过滤出相关主题的元数据
     val topicMetadata = getTopicMetadata(request, metadataRequest.isAllTopics, allowAutoCreation, authorizedTopics,
       request.context.listenerName, errorUnavailableEndpoints, errorUnavailableListeners)
 
@@ -1280,11 +1282,13 @@ class KafkaApis(val requestChannel: RequestChannel, // 请求通道
 
     val completeTopicMetadata = topicMetadata ++ unauthorizedForCreateTopicMetadata ++ unauthorizedForDescribeTopicMetadata
 
+    // 获取所有 Broker 列表
     val brokers = metadataCache.getAliveBrokerNodes(request.context.listenerName)
 
     trace("Sending topic metadata %s and brokers %s for correlation id %d to client %s".format(completeTopicMetadata.mkString(","),
       brokers.mkString(","), request.header.correlationId, request.header.clientId))
 
+    // 构建 Response 并发送
     requestHelper.sendResponseMaybeThrottle(request, requestThrottleMs =>
        MetadataResponse.prepareResponse(
          requestVersion,

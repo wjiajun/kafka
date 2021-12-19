@@ -292,7 +292,7 @@ class TopicDeletionManager(config: KafkaConfig,// KafkaConfig类，保存Broker�
     // send update metadata so that brokers stop serving data for topics to be deleted
     // 给集群所有Broker发送元数据更新请求，告诉它们不要再为这些主题处理数据了
     client.sendMetadataUpdate(topics.flatMap(controllerContext.partitionsForTopic))
-]
+
     // 分区删除操作会执行底层的物理磁盘文件删除动作
     onPartitionDeletion(topics)
   }
