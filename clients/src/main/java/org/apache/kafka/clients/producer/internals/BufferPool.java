@@ -46,9 +46,12 @@ public class BufferPool {
 
     static final String WAIT_TIME_SENSOR_NAME = "bufferpool-wait-time";
 
+    // 全部ByteBuffer的大小
     private final long totalMemory;
+    // 只针对特定大小（由poolableSize字段指定）的ByteBuffer进行管理
     private final int poolableSize;
     private final ReentrantLock lock;
+    // 其中缓存了指定大小的ByteBuffer对象
     private final Deque<ByteBuffer> free;
     private final Deque<Condition> waiters;
     /** Total available memory is the sum of nonPooledAvailableMemory and the number of byte buffers in free * poolableSize.  */
@@ -122,7 +125,7 @@ public class BufferPool {
         try {
             // check if we have a free buffer of the right size pooled
             if (size == poolableSize && !this.free.isEmpty())
-                return this.free.pollFirst();
+                return this.free.pollFirst();// 返回合适的ByteBuffer
 
             // now check if the request is immediately satisfiable with the
             // memory on hand or if we need to block
@@ -130,10 +133,12 @@ public class BufferPool {
             if (this.nonPooledAvailableMemory + freeListSize >= size) {
                 // we have enough unallocated or pooled memory to immediately
                 // satisfy the request, but need to allocate the buffer
+                // 为了让可用内存大于待分配的内存，不断释放free list，直到可用内存满足申请的size
                 freeUp(size);
                 this.nonPooledAvailableMemory -= size;
             } else {
                 // we are out of memory and will have to block
+                // 没有足够的空间就阻塞
                 int accumulated = 0;
                 Condition moreMemory = this.lock.newCondition();
                 try {
@@ -150,12 +155,14 @@ public class BufferPool {
                         } finally {
                             long endWaitNs = time.nanoseconds();
                             timeNs = Math.max(0L, endWaitNs - startWaitNs);
+                            // 统计阻塞时间
                             recordWaitTime(timeNs);
                         }
 
                         if (this.closed)
                             throw new KafkaException("Producer closed while allocating memory");
 
+                        // 超时
                         if (waitingTimeElapsed) {
                             this.metrics.sensor("buffer-exhausted-records").record();
                             throw new BufferExhaustedException("Failed to allocate memory within the configured max blocking time " + maxTimeToBlockMs + " ms.");
@@ -258,12 +265,15 @@ public class BufferPool {
     public void deallocate(ByteBuffer buffer, int size) {
         lock.lock();
         try {
+            // 释放buffer并放入队列
             if (size == this.poolableSize && size == buffer.capacity()) {
                 buffer.clear();
                 this.free.add(buffer);
             } else {
+                // 如果释放的不是buffer不放回队列，直接新增可用内存
                 this.nonPooledAvailableMemory += size;
             }
+            // 唤醒因申请内存不足而阻塞的线程
             Condition moreMem = this.waiters.peekFirst();
             if (moreMem != null)
                 moreMem.signal();

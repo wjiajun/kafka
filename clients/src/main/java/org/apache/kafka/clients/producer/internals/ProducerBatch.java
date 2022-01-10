@@ -67,15 +67,21 @@ public final class ProducerBatch {
 
     private final List<Thunk> thunks = new ArrayList<>();
     private final MemoryRecordsBuilder recordsBuilder;
+    // 尝试发送当前RecordBatch的次数
     private final AtomicInteger attempts = new AtomicInteger(0);
     private final boolean isSplitBatch;
     private final AtomicReference<FinalState> finalState = new AtomicReference<>(null);
 
+    // 保存的Record的个数
     int recordCount;
+    // 最大Record的字节数
     int maxRecordSize;
+    // 最后一次尝试发送的时间戳
     private long lastAttemptMs;
+    // 最后一次向RecordBatch追加消息的时间戳
     private long lastAppendTime;
     private long drainedMs;
+    // 是否正在重试
     private boolean retry;
     private boolean reopened;
 
@@ -103,6 +109,7 @@ public final class ProducerBatch {
      * @return The RecordSend corresponding to this record or null if there isn't sufficient room.
      */
     public FutureRecordMetadata tryAppend(long timestamp, byte[] key, byte[] value, Header[] headers, Callback callback, long now) {
+        // 预估空间不足
         if (!recordsBuilder.hasRoomFor(timestamp, key, value, headers)) {
             return null;
         } else {
@@ -265,8 +272,10 @@ public final class ProducerBatch {
             try {
                 Thunk thunk = thunks.get(i);
                 if (thunk.callback != null) {
-                    if (recordExceptions == null) {
+                    if (recordExceptions == null) { // 正常处理完成
+                        // 将服务端返回的信息和其他消息封装成RecordMetadata
                         RecordMetadata metadata = thunk.future.value();
+                        // 调用消息自定义callback
                         thunk.callback.onCompletion(metadata, null);
                     } else {
                         RuntimeException exception = recordExceptions.apply(i);
@@ -278,6 +287,7 @@ public final class ProducerBatch {
             }
         }
 
+        // 整个Batch已经处理完成
         produceFuture.done();
     }
 

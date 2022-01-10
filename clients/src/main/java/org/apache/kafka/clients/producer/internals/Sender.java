@@ -329,8 +329,10 @@ public class Sender implements Runnable {
     }
 
     private long sendProducerData(long now) {
+        // 元数据获取
         Cluster cluster = metadata.fetch();
         // get the list of partitions with data ready to send
+        // 获取已经可以发送的分区，包含符合发送条件的节点
         RecordAccumulator.ReadyCheckResult result = this.accumulator.ready(cluster, now);
 
         // if there are any partitions whose leaders are not known yet, force metadata update
@@ -343,6 +345,7 @@ public class Sender implements Runnable {
 
             log.debug("Requesting metadata update due to unknown leader topics from the batched records: {}",
                 result.unknownLeaderTopics);
+            // 因为包含没有Leader副本的分区，所以元数据重新刷新
             this.metadata.requestUpdate();
         }
 
@@ -351,6 +354,7 @@ public class Sender implements Runnable {
         long notReadyTimeout = Long.MAX_VALUE;
         while (iter.hasNext()) {
             Node node = iter.next();
+            // 获取已经可以发送的分区，包含符合发送条件的节点
             if (!this.client.ready(node, now)) {
                 iter.remove();
                 notReadyTimeout = Math.min(notReadyTimeout, this.client.pollDelayMs(node, now));
@@ -358,6 +362,7 @@ public class Sender implements Runnable {
         }
 
         // create produce requests
+        // 将符合发送的节点转换为节点:待发送batch集合
         Map<Integer, List<ProducerBatch>> batches = this.accumulator.drain(cluster, result.readyNodes, this.maxRequestSize, now);
         addToInflightBatches(batches);
         if (guaranteeMessageOrder) {
@@ -370,6 +375,7 @@ public class Sender implements Runnable {
 
         accumulator.resetNextBatchExpiryTime();
         List<ProducerBatch> expiredInflightBatches = getExpiredInflightBatches(now);
+        // 排除掉过期的batch
         List<ProducerBatch> expiredBatches = this.accumulator.expiredBatches(now);
         expiredBatches.addAll(expiredInflightBatches);
 
@@ -836,6 +842,7 @@ public class Sender implements Runnable {
         RequestCompletionHandler callback = response -> handleProduceResponse(response, recordsByPartition, time.milliseconds());
 
         String nodeId = Integer.toString(destination);
+        // 创建发送请求，每个节点一个
         ClientRequest clientRequest = client.newClientRequest(nodeId, requestBuilder, now, acks != 0,
                 requestTimeoutMs, callback);
         client.send(clientRequest, now);

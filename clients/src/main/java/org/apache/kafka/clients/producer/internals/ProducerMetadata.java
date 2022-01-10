@@ -119,6 +119,7 @@ public class ProducerMetadata extends Metadata {
         time.waitObject(this, () -> {
             // Throw fatal exceptions, if there are any. Recoverable topic errors will be handled by the caller.
             maybeThrowFatalException();
+            // 比较版本号，判断是否更新完成
             return updateVersion() > lastVersion || isClosed();
         }, deadlineMs);
 
