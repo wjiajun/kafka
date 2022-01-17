@@ -100,6 +100,8 @@ final class InFlightRequests {
     public boolean canSendMore(String node) {
         Deque<NetworkClient.InFlightRequest> queue = requests.get(node);
         return queue == null || queue.isEmpty() ||
+                // 如果队头请求发不出去，可能出现网络问题，则不能继续向此Node发送请求
+                // < this.maxInFlightRequestsPerConnection 判断是否堆积了很多未响应的请求，如果堆积了过多请求，说明这个节点负载可能比较大或者网络有问题，
                (queue.peekFirst().send.completed() && queue.size() < this.maxInFlightRequestsPerConnection);
     }
 

@@ -468,6 +468,7 @@ public final class RecordAccumulator {
                     // 查找分区leader的所在node
                     Node leader = cluster.leaderFor(part);
                     if (leader == null) {
+                        // 找不到leader不能发送消息
                         // This is a partition for which leader is not known, but messages are available to send.
                         // Note that entries are currently not removed from batches when deque is empty.
                         unknownLeaderTopics.add(part.topic());
@@ -564,8 +565,9 @@ public final class RecordAccumulator {
         // batchs的下标，记录上次停止发送的位置（如果每次都从索引0开始发送，可能会出现一直发送前几个分区的消息的情况，造成其他分区饥饿）
         int start = drainIndex = drainIndex % parts.size();
         do {
-            PartitionInfo part = parts.get(drainIndex);
+            PartitionInfo part = parts.get(drainIndex); // 获取分区详情情况
             TopicPartition tp = new TopicPartition(part.topic(), part.partition());
+            // 更新drainIndex
             this.drainIndex = (this.drainIndex + 1) % parts.size();
 
             // Only proceed if the partition has no in-flight batches.
@@ -573,12 +575,13 @@ public final class RecordAccumulator {
                 continue;
 
             // 获取tp对应的Deque
-            Deque<ProducerBatch> deque = getDeque(tp);
+            Deque<ProducerBatch> deque = getDeque(tp);// 获取对应的RecordBatch队列
             if (deque == null)
                 continue;
 
             synchronized (deque) {
                 // invariant: !isMuted(tp,now) && deque != null
+                // 获取队列中第一个RecordBatch
                 ProducerBatch first = deque.peekFirst();
                 if (first == null)
                     continue;
@@ -601,6 +604,7 @@ public final class RecordAccumulator {
                     ProducerIdAndEpoch producerIdAndEpoch =
                         transactionManager != null ? transactionManager.producerIdAndEpoch() : null;
                     // 从队列中获取一个batch
+                    // 每个TopicPartition只取一个RecordBatch
                     ProducerBatch batch = deque.pollFirst();
                     if (producerIdAndEpoch != null && !batch.hasSequence()) {
                         // If the producer id/epoch of the partition do not match the latest one
@@ -625,6 +629,7 @@ public final class RecordAccumulator {
 
                         transactionManager.addInFlightBatch(batch);
                     }
+                    // 关闭Compressor及底层输出流，并将MemoryRecords设置为只读
                     batch.close();
                     size += batch.records().sizeInBytes();
                     // 将这个batch放到ready集合

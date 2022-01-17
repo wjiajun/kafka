@@ -123,6 +123,7 @@ public class KafkaChannel implements AutoCloseable {
     private final int maxReceiveSize;
     private final MemoryPool memoryPool;
     private final ChannelMetadataRegistry metadataRegistry;
+    // 读和写时用的缓存
     private NetworkReceive receive;
     private NetworkSend send;
     // Track connection and mute state of channels to enable outstanding requests on channels to be
@@ -380,11 +381,13 @@ public class KafkaChannel implements AutoCloseable {
         if (this.send != null)
             throw new IllegalStateException("Attempt to begin a send operation with prior send operation still in progress, connection id is " + id);
         this.send = send;
+        // 开始关注此连接的OP_WRITE事件，并没有发生网络I/O
         this.transportLayer.addInterestOps(SelectionKey.OP_WRITE);
     }
 
     public NetworkSend maybeCompleteSend() {
-        if (send != null && send.completed()) {
+        // 如果一次发送不完OP_WRITE不会取消
+        if (send != null && send.completed()) {// 通过判断ByteBuffer中是否还有剩余字节
             midWrite = false;
             transportLayer.removeInterestOps(SelectionKey.OP_WRITE);
             NetworkSend result = send;
@@ -413,6 +416,7 @@ public class KafkaChannel implements AutoCloseable {
     }
 
     public NetworkReceive maybeCompleteReceive() {
+        // 如果没有读取到完整的receive，则触发OP_READ事件时继续填充，如果读取了一个完整的receive对象，则将receive对象置空，下次触发读操作时创建新的receive对象
         if (receive != null && receive.complete()) {
             receive.payload().rewind();
             NetworkReceive result = receive;
@@ -427,6 +431,7 @@ public class KafkaChannel implements AutoCloseable {
             return 0;
 
         midWrite = true;
+        // 如果send在一次write调用还没发送完，SelectionKey的op_write事件没有取消，还会继续监听此channel的op_write事件
         return send.writeTo(transportLayer);
     }
 

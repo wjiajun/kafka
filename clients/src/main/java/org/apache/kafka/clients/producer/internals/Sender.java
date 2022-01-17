@@ -169,6 +169,7 @@ public class Sender implements Runnable {
 
     private void maybeRemoveAndDeallocateBatch(ProducerBatch batch) {
         maybeRemoveFromInflightBatches(batch);
+        // 释放空间
         this.accumulator.deallocate(batch);
     }
 
@@ -355,6 +356,7 @@ public class Sender implements Runnable {
         while (iter.hasNext()) {
             Node node = iter.next();
             // 获取已经可以发送的分区，包含符合发送条件的节点
+            // 检查网络I/O方面是否符合发送消息的条件，不符合条件的Node将会从readyNodes集合中删除
             if (!this.client.ready(node, now)) {
                 iter.remove();
                 notReadyTimeout = Math.min(notReadyTimeout, this.client.pollDelayMs(node, now));
@@ -376,6 +378,7 @@ public class Sender implements Runnable {
         accumulator.resetNextBatchExpiryTime();
         List<ProducerBatch> expiredInflightBatches = getExpiredInflightBatches(now);
         // 排除掉过期的batch
+        // 遍历RecordAccumulator中保存的全部RecordBatch，调用RecordBatch.maybeExpire()方法进行处理。如果已超时，则调用RecordBatch.done()方法，其中会触发自定义Callback，并将RecordBatch从队列中移除，释放ByteBuffer空间
         List<ProducerBatch> expiredBatches = this.accumulator.expiredBatches(now);
         expiredBatches.addAll(expiredInflightBatches);
 
@@ -625,6 +628,7 @@ public class Sender implements Runnable {
                     batch.topicPartition,
                     this.retries - batch.attempts() - 1,
                     formatErrMsg(response));
+                // 对于可重试的RecordBatch，则重新添加到RecordAccumulator中，等待发送
                 reenqueueBatch(batch, now);
             } else if (error == Errors.DUPLICATE_SEQUENCE_NUMBER) {
                 // If we have received a duplicate sequence error, it means that the sequence number has advanced beyond
@@ -637,6 +641,7 @@ public class Sender implements Runnable {
                 // tell the user the result of their request. We only adjust sequence numbers if the batch didn't exhaust
                 // its retries -- if it did, we don't know whether the sequence number was accepted or not, and
                 // thus it is not safe to reassign the sequence.
+                // 不可重试的标记为异常完成
                 failBatch(batch, response, batch.attempts() < this.retries);
             }
             if (error.exception() instanceof InvalidMetadataException) {
@@ -649,6 +654,7 @@ public class Sender implements Runnable {
                             "to request metadata update now", batch.topicPartition,
                             error.exception(response.errorMessage).toString());
                 }
+                // 标识需更新集群中的元数据
                 metadata.requestUpdate();
             }
         } else {
@@ -761,6 +767,7 @@ public class Sender implements Runnable {
 
         this.sensors.recordErrors(batch.topicPartition.topic(), batch.recordCount);
 
+        // 调用异常回调方法
         if (batch.completeExceptionally(topLevelException, recordExceptions)) {
             maybeRemoveAndDeallocateBatch(batch);
         }
@@ -804,6 +811,7 @@ public class Sender implements Runnable {
                 minUsedMagic = batch.magic();
         }
         ProduceRequestData.TopicProduceDataCollection tpd = new ProduceRequestData.TopicProduceDataCollection();
+        // 将RecordBatch 列表按照partition进行分类
         for (ProducerBatch batch : batches) {
             TopicPartition tp = batch.topicPartition;
             MemoryRecords records = batch.records();

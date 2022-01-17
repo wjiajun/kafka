@@ -33,6 +33,7 @@ public class NetworkSend implements Send {
 
     @Override
     public boolean completed() {
+        // 判断是否完成是通过ByteBuffer中是否还有剩余字节
         return send.completed();
     }
 

@@ -280,6 +280,7 @@ public class Metadata implements Closeable {
 
         String previousClusterId = cache.clusterResource().clusterId();
 
+        // 更新cluster
         this.cache = handleMetadataResponse(response, isPartialUpdate, nowMs);
 
         Cluster cluster = cache.cluster();
@@ -291,6 +292,7 @@ public class Metadata implements Closeable {
         if (!Objects.equals(previousClusterId, newClusterId)) {
             log.info("Cluster ID: {}", newClusterId);
         }
+        // 通知Metadata上的监听器
         clusterResourceListeners.onUpdate(cache.clusterResource());
 
         log.debug("Updated cluster metadata updateVersion {} to {}", this.updateVersion, this.cache);
@@ -523,11 +525,13 @@ public class Metadata implements Closeable {
 
         // Perform a partial update only if a full update hasn't been requested, and the last successful
         // hasn't exceeded the metadata refresh time.
+        // 指定需要更新的元数据topic
         if (!this.needFullUpdate && this.lastSuccessfulRefreshMs + this.metadataExpireMs > nowMs) {
             request = newMetadataRequestBuilderForNewTopics();
             isPartialUpdate = true;
         }
         if (request == null) {
+            // 如果为空，则更新所有topic
             request = newMetadataRequestBuilder();
             isPartialUpdate = false;
         }

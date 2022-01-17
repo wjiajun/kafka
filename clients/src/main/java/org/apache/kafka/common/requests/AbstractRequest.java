@@ -76,8 +76,8 @@ public abstract class AbstractRequest implements AbstractRequestResponse {
         public abstract T build(short version);
     }
 
-    private final short version;
-    private final ApiKeys apiKey;
+    private final short version; // api 版本号
+    private final ApiKeys apiKey; // api 标识
 
     public AbstractRequest(ApiKeys apiKey, short version) {
         if (!apiKey.isVersionSupported(version))

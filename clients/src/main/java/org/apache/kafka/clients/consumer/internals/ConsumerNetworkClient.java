@@ -58,12 +58,14 @@ public class ConsumerNetworkClient implements Closeable {
     // flag and the request completion queue below).
     private final Logger log;
     private final KafkaClient client;
+    // 缓存队列，key node,value 发往 node 的clientRequest集合
     private final UnsentRequests unsent = new UnsentRequests();
     private final Metadata metadata;
     private final Time time;
     private final long retryBackoffMs;
     private final int maxPollTimeoutMs;
     private final int requestTimeoutMs;
+    // consumer线程修改，表示是否正在不可中断的方法，每进入一个不可中断方法就 + 1，退出就 -1
     private final AtomicBoolean wakeupDisabled = new AtomicBoolean();
 
     // We do not need high throughput, so use a fair lock to try to avoid starvation
@@ -77,6 +79,7 @@ public class ConsumerNetworkClient implements Closeable {
 
     // this flag allows the client to be safely woken up without waiting on the lock above. It is
     // atomic to avoid the need to acquire the lock above in order to enable it concurrently.
+    // 中断KafkaConsumer线程的标记
     private final AtomicBoolean wakeup = new AtomicBoolean(false);
 
     public ConsumerNetworkClient(LogContext logContext,

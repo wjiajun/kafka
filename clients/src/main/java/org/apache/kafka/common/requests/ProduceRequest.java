@@ -109,6 +109,7 @@ public class ProduceRequest extends AbstractRequest {
      * We have to copy acks, timeout, transactionalId and partitionSizes from data since data maybe reset to eliminate
      * the reference to ByteBuffer but those metadata are still useful.
      */
+    // 表示需要有多少副本成功复制了这个请求，-1表示所有isr都完成了复制功能
     private final short acks;
     private final int timeout;
     private final String transactionalId;
