@@ -578,7 +578,9 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     private final IsolationLevel isolationLevel;
 
     private final Time time;
+    // 负责消费者与Kafka服务端的网络通信
     private final ConsumerNetworkClient client;
+    // 维护了消费者的消费状态
     private final SubscriptionState subscriptions;
     private final ConsumerMetadata metadata;
     private final long retryBackoffMs;
