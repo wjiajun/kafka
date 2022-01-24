@@ -87,11 +87,13 @@ import java.util.stream.Collectors;
 public final class ConsumerCoordinator extends AbstractCoordinator {
     private final GroupRebalanceConfig rebalanceConfig;
     private final Logger log;
+    // 在消费者发送的JoinGroupRequest请求中包含了消费者自身支持的PartitionAssignor信息，GroupCoordinator从所有消费者都支持的分配策略中选择一个，通知Leader使用此分配策略
     private final List<ConsumerPartitionAssignor> assignors;
     private final ConsumerMetadata metadata;
     private final ConsumerCoordinatorMetrics sensors;
     private final SubscriptionState subscriptions;
     private final OffsetCommitCallback defaultOffsetCommitCallback;
+    // 是否开启了自动提交offset
     private final boolean autoCommitEnabled;
     private final int autoCommitIntervalMs;
     private final ConsumerInterceptors<?, ?> interceptors;
@@ -103,6 +105,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
     private boolean isLeader = false;
     private Set<String> joinedSubscription;
+    // 用来存储Metadata的快照信息，主要用来检测Topic是否发生了分区数量的变化
     private MetadataSnapshot metadataSnapshot;
     private MetadataSnapshot assignmentSnapshot;
     private Timer nextAutoCommitTimer;
@@ -350,8 +353,10 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         // Only the leader is responsible for monitoring for metadata changes (i.e. partition changes)
         if (!isLeader)
+            // 只有leader需要比较快照
             assignmentSnapshot = null;
 
+        // 查找使用的分区策略
         ConsumerPartitionAssignor assignor = lookupAssignor(assignmentStrategy);
         if (assignor == null)
             throw new IllegalStateException("Coordinator selected invalid assignment protocol: " + assignmentStrategy);
@@ -368,6 +373,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 "it is possible that the leader's assign function is buggy and did not return any assignment for this member, " +
                 "or because static member is configured and the protocol is buggy hence did not get the assignment for this member");
 
+        // 反序列化，更新Assignment
         Assignment assignment = ConsumerProtocol.deserializeAssignment(assignmentBuffer);
 
         Set<TopicPartition> assignedPartitions = new HashSet<>(assignment.partitions());
@@ -423,10 +429,11 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         // Reschedule the auto commit starting from now
         if (autoCommitEnabled)
             this.nextAutoCommitTimer.updateAndReset(autoCommitIntervalMs);
-
+        // 填充assign集合
         subscriptions.assignFromSubscribed(assignedPartitions);
 
         // Add partitions that were not previously owned but are now assigned
+        // 调用rebalance 回调方法
         firstException.compareAndSet(null, invokePartitionsAssigned(addedPartitions));
 
         if (firstException.get() != null) {
@@ -560,6 +567,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     protected Map<String, ByteBuffer> performAssignment(String leaderId,
                                                         String assignmentStrategy,
                                                         List<JoinGroupResponseData.JoinGroupResponseMember> allSubscriptions) {
+        // 查找分区使用的PartitionAssignor
         ConsumerPartitionAssignor assignor = lookupAssignor(assignmentStrategy);
         if (assignor == null)
             throw new IllegalStateException("Coordinator selected invalid assignment protocol: " + assignmentStrategy);
@@ -580,12 +588,14 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         // the leader will begin watching for changes to any of the topics the group is interested in,
         // which ensures that all metadata changes will eventually be seen
+        // 对于leader来说要关注全部消费者订阅的topic
         updateGroupSubscription(allSubscribedTopics);
 
         isLeader = true;
 
         log.debug("Performing assignment using strategy {} with subscriptions {}", assignor.name(), subscriptions);
 
+        // 进行分区分配
         Map<String, Assignment> assignments = assignor.assign(metadata.fetch(), new GroupSubscription(subscriptions)).groupAssignment();
 
         if (protocol == RebalanceProtocol.COOPERATIVE) {
@@ -625,6 +635,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         log.info("Finished assignment for group at generation {}: {}", generation().generationId, assignments);
 
+        // 将分区结果序列化操作
         Map<String, ByteBuffer> groupAssignment = new HashMap<>();
         for (Map.Entry<String, Assignment> assignmentEntry : assignments.entrySet()) {
             ByteBuffer buffer = ConsumerProtocol.serializeAssignment(assignmentEntry.getValue());
@@ -673,6 +684,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     protected void onJoinPrepare(int generation, String memberId) {
         log.debug("Executing onJoinPrepare with generation {} and memberId {}", generation, memberId);
         // commit offsets prior to rebalance if auto-commit enabled
+        // 进行一次同步提交
         maybeAutoCommitOffsetsSync(time.timer(rebalanceConfig.rebalanceTimeoutMs));
 
         // the generation / member-id can possibly be reset by the heartbeat thread
@@ -690,8 +702,10 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             if (!revokedPartitions.isEmpty()) {
                 log.info("Giving away all assigned partitions as lost since generation has been reset," +
                     "indicating that consumer is no longer part of the group");
+                // 调用注册在SubscriptionState中的ConsumerRebalanceListener上的回调方法
                 exception = invokePartitionsLost(revokedPartitions);
 
+                // 将SubscriptionState的needsPartitionAssignment字段设置为true并收缩groupSubscription集合
                 subscriptions.assignFromSubscribed(Collections.emptySet());
             }
         } else {

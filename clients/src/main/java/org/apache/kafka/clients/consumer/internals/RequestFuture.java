@@ -199,7 +199,9 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
      * @return The new future
      */
     public <S> RequestFuture<S> compose(final RequestFutureAdapter<T, S> adapter) {
+        // 适配后的结果
         final RequestFuture<S> adapted = new RequestFuture<>();
+        // 在当前RequestFuture上增加监听器
         addListener(new RequestFutureListener<T>() {
             @Override
             public void onSuccess(T value) {
@@ -215,14 +217,16 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
     }
 
     public void chain(final RequestFuture<T> future) {
-        addListener(new RequestFutureListener<T>() {
+        addListener(new RequestFutureListener<T>() {// 添加监听器
             @Override
             public void onSuccess(T value) {
+                // 通过监听器将value传递给下一个RequestFuture
                 future.complete(value);
             }
 
             @Override
             public void onFailure(RuntimeException e) {
+                // 通过监听器将异常传递给下一个RequestFuture
                 future.raise(e);
             }
         });

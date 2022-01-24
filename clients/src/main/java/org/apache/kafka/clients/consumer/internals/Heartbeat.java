@@ -35,6 +35,7 @@ public final class Heartbeat {
     private final Timer pollTimer;
     private final Logger log;
 
+    // 最近发送心跳的时间
     private volatile long lastHeartbeatSend = 0L;
     private volatile boolean heartbeatInFlight = false;
 
@@ -69,7 +70,9 @@ public final class Heartbeat {
     }
 
     void sentHeartbeat(long now) {
+        // 更新最近一次发送HeartbeatRequest请求的时间
         lastHeartbeatSend = now;
+        // 将requestInFlight设置为true，表示有未响应的HeartbeatRequest请求，防止重复发送
         heartbeatInFlight = true;
         update(now);
         heartbeatTimer.reset(rebalanceConfig.heartbeatIntervalMs);
@@ -88,6 +91,7 @@ public final class Heartbeat {
     }
 
     void receiveHeartbeat() {
+        // 更新时间
         update(time.milliseconds());
         heartbeatInFlight = false;
         sessionTimer.reset(rebalanceConfig.sessionTimeoutMs);

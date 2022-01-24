@@ -74,25 +74,37 @@ public class SubscriptionState {
 
     private final Logger log;
 
+    /**
+     * ·NONE：SubscriptionState.subscriptionType的初始值。
+     * ·AUTO_TOPICS：按照指定的Topic名字进行订阅，自动分配分区。
+     * ·AUTO_PATTERN：按照指定的正则表达式匹配Topic进行订阅，自动分配分区。
+     * ·USER A_SSIGNED：用户手动指定消费者消费的Topic以及分区编号。
+     */
     private enum SubscriptionType {
         NONE, AUTO_TOPICS, AUTO_PATTERN, USER_ASSIGNED
     }
 
     /* the type of subscription */
+    // 表示订阅的模式
     private SubscriptionType subscriptionType;
 
     /* the pattern user has requested */
+    // 使用AUTO_PATTERN模式时，是按照此字段记录的正则表达式对所有Topic进行匹配，对匹配符合的Topic进行订阅
     private Pattern subscribedPattern;
 
     /* the list of topics the user has requested */
+    // 如果使用AUTO_TOPICS或AUTO_PATTERN模式，则使用此集合记录所有订阅的Topic。
     private Set<String> subscription;
 
     /* The list of topics the group has subscribed to. This may include some topics which are not part
      * of `subscription` for the leader of a group since it is responsible for detecting metadata changes
      * which require a group rebalance. */
+    // consumer group Leader使用该集合记录Consumer Group中所有消费者订阅的Topic
+    // 其他Follower的该集合中只保存了其自身的订阅的Topic
     private Set<String> groupSubscription;
 
     /* the partitions that are currently assigned, note that the order of partition matters (see FetchBuilder for more details) */
+    // 记录每个TopicPartition的消费状态
     private final PartitionStates<TopicPartitionState> assignment;
 
     /* Default offset reset strategy */
@@ -164,6 +176,7 @@ public class SubscriptionState {
 
     public synchronized boolean subscribe(Set<String> topics, ConsumerRebalanceListener listener) {
         registerRebalanceListener(listener);
+        // 选择自动topic方式
         setSubscriptionType(SubscriptionType.AUTO_TOPICS);
         return changeSubscription(topics);
     }
@@ -182,10 +195,11 @@ public class SubscriptionState {
         return changeSubscription(topics);
     }
 
+    // 消费者自身订阅的Topic添加到groupSubscribe集合
     private boolean changeSubscription(Set<String> topicsToSubscribe) {
         if (subscription.equals(topicsToSubscribe))
             return false;
-
+        // 设置需要订阅的分区
         subscription = topicsToSubscribe;
         return true;
     }
@@ -196,6 +210,8 @@ public class SubscriptionState {
      *
      * @param topics All topics from the group subscription
      * @return true if the group subscription contains topics which are not part of the local subscription
+     *
+     * Leader收到JoinGroupResponse时调用，在JoinGroupResponse中包含了全部消费者订阅的Topic，在此时将Topic信息添加到groupSubscribe集合
      */
     synchronized boolean groupSubscribe(Collection<String> topics) {
         if (!hasAutoAssignedPartitions())
@@ -743,12 +759,15 @@ public class SubscriptionState {
     private static class TopicPartitionState {
 
         private FetchState fetchState;
+        // 记录了下次要从Kafka服务端获取的消息的offset
         private FetchPosition position; // last consumed position
 
         private Long highWatermark; // the high watermark from last fetch
         private Long logStartOffset; // the log start offset
         private Long lastStableOffset;
+        // 记录了当前TopicPartition是否处于暂停状态
         private boolean paused;  // whether this partition has been paused by the user
+        // 重置position的策略
         private OffsetResetStrategy resetStrategy;  // the strategy to use if the offset needs resetting
         private Long nextRetryTimeMs;
         private Integer preferredReadReplica;

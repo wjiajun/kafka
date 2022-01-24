@@ -96,6 +96,8 @@ import java.util.TreeSet;
  * <li><code>I1: [t0p1, t1p1]</code>
  * <li><code>I2: [t0p2, t1p2]</code>
  * </ul>
+ *
+ * 将所有Topic的Partition按照字典序排列，然后对每个Consumer进行轮询分配
  */
 public class RoundRobinAssignor extends AbstractPartitionAssignor {
 

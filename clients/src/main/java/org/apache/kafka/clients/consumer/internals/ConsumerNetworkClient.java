@@ -139,6 +139,7 @@ public class ConsumerNetworkClient implements Closeable {
         return completionHandler.future;
     }
 
+    // 查找Kafka集群中负载最低的Node
     public Node leastLoadedNode() {
         lock.lock();
         try {
@@ -161,6 +162,7 @@ public class ConsumerNetworkClient implements Closeable {
      * Block waiting on the metadata refresh with a timeout.
      *
      * @return true if update succeeded, false otherwise.
+     * 循环调用poll()方法，直到Metadata版本号增加，实现阻塞等待Metadata更新完成
      */
     public boolean awaitMetadataUpdate(Timer timer) {
         int version = this.metadata.requestUpdate();
@@ -346,6 +348,8 @@ public class ConsumerNetworkClient implements Closeable {
      * @param node The node to await requests from
      * @param timer Timer bounding how long this method can block
      * @return true If all requests finished, false if the timeout expired first
+     *
+     * 等待unsent和InFightRequests中的请求全部完成（正常收到响应或出现异常）
      */
     public boolean awaitPendingRequests(Node node, Timer timer) {
         while (hasPendingRequests(node) && timer.notExpired()) {

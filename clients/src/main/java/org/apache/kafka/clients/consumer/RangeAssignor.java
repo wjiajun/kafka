@@ -63,6 +63,8 @@ import java.util.Map;
  * <li><code>I0: [t0p0, t0p1, t1p0, t1p1]</code>
  * <li><code>I1: [t0p2, t1p2]</code>
  * </ul>
+ *
+ * 针对每个Topic，n=分区数/消费者数量，m=分区数%消费者数量，前m个消费者每个分配n+1个分区，后面的（消费者数量-m）个消费者每个分配n个Partition
  */
 public class RangeAssignor extends AbstractPartitionAssignor {
 
