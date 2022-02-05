@@ -166,10 +166,13 @@ class LogSegment private[log] (val log: FileRecords,//Kafka 消息的对象
       // 时间戳索引项保存时间戳与消息位移的对应关系
       // 日志段每写入4KB 数据就要写入一个索引项。当已写入字节数超过了 4KB 之后，append 方法会调用索引对象的 append 方法新增索引项，同时清空已写入字节数
       if (bytesSinceLastIndexEntry > indexIntervalBytes) {
+        // 添加索引
         offsetIndex.append(largestOffset, physicalPosition)
         timeIndex.maybeAppend(maxTimestampSoFar, offsetOfMaxTimestampSoFar)
+        // 成功添加索引后bytesSinceLastIndexEntry设置为0
         bytesSinceLastIndexEntry = 0
       }
+      // 更新bytesSinceLastIndexEntry
       bytesSinceLastIndexEntry += records.sizeInBytes
     }
   }
@@ -273,6 +276,7 @@ class LogSegment private[log] (val log: FileRecords,//Kafka 消息的对象
    */
   @threadsafe
   private[log] def translateOffset(offset: Long, startingFilePosition: Int = 0): LogOffsetPosition = {
+    // 查找索引文件
     val mapping = offsetIndex.lookup(offset)
     log.searchForOffsetWithSize(offset, max(mapping.position, startingFilePosition))
   }
@@ -292,11 +296,12 @@ class LogSegment private[log] (val log: FileRecords,//Kafka 消息的对象
   @threadsafe
   def read(startOffset: Long,// 要读取的第一条消息的位移
            maxSize: Int,// 能读取的最大字节数
-           maxPosition: Long = size,// 能读到的最大文件位置
+           maxPosition: Long = size,// 能读到的最大文件位置(读取的最大物理地址)
            minOneMessage: Boolean = false): FetchDataInfo = { // 是否允许在消息体过大时至少返回第一条消息
     if (maxSize < 0)
       throw new IllegalArgumentException(s"Invalid max size $maxSize for log read from segment $log")
 
+    // 转换为物理文件的地址
     val startOffsetAndSize = translateOffset(startOffset) // 定位要读取的起始文件位置, 根据索引信息找到对应的物理文件位置才能开始读取消息。
 
     // if the start position is already off the end of the log, return null
@@ -337,6 +342,7 @@ class LogSegment private[log] (val log: FileRecords,//Kafka 消息的对象
     // Broker 在启动时会从磁盘上加载所有日志段信息到内存中，并创建相应的 LogSegment 对象实例。
   @nonthreadsafe
   def recover(producerStateManager: ProducerStateManager, leaderEpochCache: Option[LeaderEpochFileCache] = None): Int = {
+      // 清空索引文件，底层只是移动了指针，后续的写入会覆盖原有的内容
     offsetIndex.reset()
     timeIndex.reset()
     txnIndex.reset()
@@ -385,12 +391,12 @@ class LogSegment private[log] (val log: FileRecords,//Kafka 消息的对象
       debug(s"Truncated $truncated invalid bytes at the end of segment ${log.file.getAbsoluteFile} during recovery")
     }
 
-    log.truncateTo(validBytes)
-    offsetIndex.trimToValidSize()
+    log.truncateTo(validBytes)// 对日志文件进行截断，抛弃后面验证失败的Message
+    offsetIndex.trimToValidSize()// 对索引文件进行相应的截断
     // A normally closed segment always appends the biggest timestamp ever seen into log segment, we do this as well.
     timeIndex.maybeAppend(maxTimestampSoFar, offsetOfMaxTimestampSoFar, skipFullCheck = true)
     timeIndex.trimToValidSize()
-    truncated
+    truncated// 返回截掉的字节数
   }
 
   private def loadLargestTimestamp(): Unit = {

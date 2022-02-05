@@ -515,6 +515,10 @@ public final class LegacyRecord {
 
     /**
      * Compute the checksum of the record from the attributes, key and value payloads
+     *
+     * magic为1字节，魔数标识，与消息格式有关，取值为0或1。
+     * magic为0时，消息的offset使用绝对offset且消息格式中没有timestamp部分；
+     * magic为1时，消息的offset使用相对offset且消息格式中存在timestamp部分
      */
     private static long computeChecksum(byte magic, byte attributes, long timestamp, ByteBuffer key, ByteBuffer value) {
         Crc32 crc = new Crc32();

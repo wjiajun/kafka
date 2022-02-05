@@ -477,6 +477,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         invokeCompletedOffsetCommitCallbacks();
 
         if (subscriptions.hasAutoAssignedPartitions()) {
+            // 完成Rebalance操作
             if (protocol == null) {
                 throw new IllegalStateException("User configured " + ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG +
                     " to empty while trying to subscribe for group protocol to auto assign partitions");
@@ -805,14 +806,18 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
      *
      * @param timer Timer bounding how long this method can block
      * @return true iff the operation completed within the timeout
+     *
+     * 从服务端拉取最近提交的offset集合，并更新到Subscriptions集合中
      */
     public boolean refreshCommittedOffsetsIfNeeded(Timer timer) {
         final Set<TopicPartition> initializingPartitions = subscriptions.initializingPartitions();
 
+        // 发送fetch offset并处理对应的reponse
         final Map<TopicPartition, OffsetAndMetadata> offsets = fetchCommittedOffsets(initializingPartitions, timer);
         if (offsets == null) return false;
 
         for (final Map.Entry<TopicPartition, OffsetAndMetadata> entry : offsets.entrySet()) {
+            // 处理offsets集合
             final TopicPartition tp = entry.getKey();
             final OffsetAndMetadata offsetAndMetadata = entry.getValue();
             if (offsetAndMetadata != null) {
@@ -857,6 +862,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         }
 
         do {
+            // 检查Coordinator状态
             if (!ensureCoordinatorReady(timer)) return null;
 
             // contact coordinator to fetch committed offsets
@@ -864,15 +870,18 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             if (pendingCommittedOffsetRequest != null) {
                 future = pendingCommittedOffsetRequest.response;
             } else {
+                // 发送并缓存OffsetFetchRequest
                 future = sendOffsetFetchRequest(partitions);
                 pendingCommittedOffsetRequest = new PendingCommittedOffsetRequest(partitions, generationForOffsetRequest, future);
             }
+            // 阻塞等待获取结果
             client.poll(future, timer);
 
             if (future.isDone()) {
                 pendingCommittedOffsetRequest = null;
 
                 if (future.succeeded()) {
+                    // 返回获取的offset
                     return future.value();
                 } else if (!future.isRetriable()) {
                     throw future.exception();
@@ -946,6 +955,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 @Override
                 public void onSuccess(Void value) {
                     pendingAsyncCommits.decrementAndGet();
+                    // 创建并缓存OffsetCommitRequest
                     doCommitOffsetsAsync(offsets, callback);
                     client.pollNoWakeup();
                 }
@@ -1185,6 +1195,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             sensors.commitSensor.record(response.requestLatencyMs());
             Set<String> unauthorizedTopics = new HashSet<>();
 
+            // 遍历所有待提交的offset
             for (OffsetCommitResponseData.OffsetCommitResponseTopic topic : commitResponse.data().topics()) {
                 for (OffsetCommitResponseData.OffsetCommitResponsePartition partition : topic.partitions()) {
                     TopicPartition tp = new TopicPartition(topic.name(), partition.partitionIndex());
@@ -1192,6 +1203,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
                     long offset = offsetAndMetadata.offset();
 
+                    // 获取错误码
                     Errors error = Errors.forCode(partition.errorCode());
                     if (error == Errors.NONE) {
                         log.debug("Committed offset {} for partition {}", offset, tp);
@@ -1288,6 +1300,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 log.error("Not authorized to commit to topics {}", unauthorizedTopics);
                 future.raise(new TopicAuthorizationException(unauthorizedTopics));
             } else {
+                // 传播成功提交offset事件
                 future.complete(null);
             }
         }
@@ -1344,6 +1357,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             Set<String> unauthorizedTopics = null;
             Map<TopicPartition, OffsetFetchResponse.PartitionData> responseData =
                 response.partitionDataMap(rebalanceConfig.groupId);
+            // 记录从服务端获取的offset集合
             Map<TopicPartition, OffsetAndMetadata> offsets = new HashMap<>(responseData.size());
             Set<TopicPartition> unstableTxnOffsetTopicPartitions = new HashSet<>();
             for (Map.Entry<TopicPartition, OffsetFetchResponse.PartitionData> entry : responseData.entrySet()) {
@@ -1371,6 +1385,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 } else if (partitionData.offset >= 0) {
                     // record the position with the offset (-1 indicates no committed offset to fetch);
                     // if there's no committed offset, record as null
+                    // 记录正常的offset
                     offsets.put(tp, new OffsetAndMetadata(partitionData.offset, partitionData.leaderEpoch, partitionData.metadata));
                 } else {
                     log.info("Found no committed offset for partition {}", tp);
@@ -1389,6 +1404,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                              "normal offsets waiting for replication after appending to local log", unstableTxnOffsetTopicPartitions);
                 future.raise(new UnstableOffsetCommitException("There are unstable offsets for the requested topic partitions"));
             } else {
+                // 传播offsets集合，最终通过fetchCommittedOffsets返回
                 future.complete(offsets);
             }
         }

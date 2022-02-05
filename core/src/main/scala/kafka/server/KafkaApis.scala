@@ -172,7 +172,6 @@ class KafkaApis(val requestChannel: RequestChannel, // 请求通道
       // 1. 添加新的apiKey标识新请求类型
       // 2. 添加新的case分支
       // 3. 添加对应的handle***方法
-
       request.header.apiKey match {
         case ApiKeys.PRODUCE => handleProduceRequest(request, requestLocal)
         case ApiKeys.FETCH => handleFetchRequest(request)

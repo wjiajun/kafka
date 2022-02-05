@@ -151,8 +151,8 @@ class LocalLog(@volatile private var _dir: File,
   private[log] def markFlushed(offset: Long): Unit = {
     checkIfMemoryMappedBufferClosed()
     if (offset > recoveryPoint) {
-      updateRecoveryPoint(offset)
-      lastFlushedTime.set(time.milliseconds)
+      updateRecoveryPoint(offset)// 后移recoveryPoint
+      lastFlushedTime.set(time.milliseconds)// 修改lastFlushedTime
     }
   }
 
@@ -168,7 +168,9 @@ class LocalLog(@volatile private var _dir: File,
    * @param offset The offset to flush up to (non-inclusive)
    */
   private[log] def flush(offset: Long): Unit = {
+    // 通过跳表查找recoveryPoint到offset之间的对象
     val segmentsToFlush = segments.values(recoveryPoint, offset)
+    // 刷盘
     segmentsToFlush.foreach(_.flush())
     // If there are any new segments, we need to flush the parent directory for crash consistency.
     segmentsToFlush.lastOption.filter(_.baseOffset >= this.recoveryPoint).foreach(_ => Utils.flushDir(dir.toPath))
@@ -199,7 +201,6 @@ class LocalLog(@volatile private var _dir: File,
    *  2.写入新消息时：这个最容易理解。以上面的图为例，当不断向 Log 对象插入新消息时，LEO 值就像一个指针一样，需要不停地向右移动，也就是不断地增加。
    *  3.Log 对象发生日志切分（Log Roll）时：日志切分是啥呢？其实就是创建一个全新的日志段对象，并且关闭当前写入的日志段对象。这通常发生在当前日志段对象已满的时候。
    *    一旦发生日志切分，说明 Log 对象切换了 Active Segment，那么，LEO 中的起始位移值和段大小数据都要被更新，因此，在进行这一步操作时，我们必须要更新 LEO 对象。
-   *  4.
    */
   private[log] def updateLogEndOffset(endOffset: Long): Unit = {
     nextOffsetMetadata = LogOffsetMetadata(endOffset, segments.activeSegment.baseOffset, segments.activeSegment.size)
@@ -398,7 +399,7 @@ class LocalLog(@volatile private var _dir: File,
           if (fetchDataInfo != null) { // 如果没有返回任何消息，去下一个日志段对象试试
             if (includeAbortedTxns)
               fetchDataInfo = addAbortedTransactions(startOffset, segment, fetchDataInfo)
-          } else segmentOpt = segments.higherSegment(baseOffset)  // 否则返回
+          } else segmentOpt = segments.higherSegment(baseOffset)  // 没有读取到消息返回下一个LogSegment
         }
 
         if (fetchDataInfo != null) fetchDataInfo
@@ -473,7 +474,9 @@ class LocalLog(@volatile private var _dir: File,
     maybeHandleIOException(s"Error while rolling log segment for $topicPartition in dir ${dir.getParent}") {
       val start = time.hiResClockMs()
       checkIfMemoryMappedBufferClosed()
+      // 获取LEO
       val newOffset = math.max(expectedNextOffset.getOrElse(0L), logEndOffset)
+      // 新日志文件的文件名 LEO.log
       val logFile = LocalLog.logFile(dir, newOffset)
       val activeSegment = segments.activeSegment
       if (segments.contains(newOffset)) {
@@ -496,6 +499,7 @@ class LocalLog(@volatile private var _dir: File,
           s"Trying to roll a new log segment for topic partition $topicPartition with " +
             s"start offset $newOffset =max(provided offset = $expectedNextOffset, LEO = $logEndOffset) lower than start offset of the active segment $activeSegment")
       } else {
+        // 新索引文件名[LEO].log
         val offsetIdxFile = offsetIndexFile(dir, newOffset)
         val timeIdxFile = timeIndexFile(dir, newOffset)
         val txnIdxFile = transactionIndexFile(dir, newOffset)
@@ -514,10 +518,12 @@ class LocalLog(@volatile private var _dir: File,
         time = time,
         initFileSize = config.initFileSize,
         preallocate = config.preallocate)
+      // 添加到跳表中
       segments.add(newSegment)
 
       // We need to update the segment base offset and append position data of the metadata when log rolls.
       // The next offset should not change.
+      // 更新nextOffsetMetadata，更新activeOffset.baseOffset和activeSegment.size，而LEO并不会改变
       updateLogEndOffset(nextOffsetMetadata.messageOffset)
 
       info(s"Rolled new log segment at offset $newOffset in ${time.hiResClockMs() - start} ms.")

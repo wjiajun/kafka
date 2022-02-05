@@ -318,6 +318,7 @@ class SocketServer(val config: KafkaConfig,
     val isPrivilegedListener = controlPlaneRequestChannelOpt.isEmpty && config.interBrokerListenerName == listenerName
 
     for (_ <- 0 until newProcessorsPerListener) {
+      // 创建processor对象
       val processor = newProcessor(nextProcessorId, dataPlaneRequestChannel, connectionQuotas,
         listenerName, securityProtocol, memoryPool, isPrivilegedListener)
       listenerProcessors += processor
@@ -542,6 +543,7 @@ private[kafka] abstract class AbstractServerThread(connectionQuotas: ConnectionQ
   /**
    * Record that the thread shutdown is complete
    */
+  // 标识关闭操作完成，唤醒阻塞线程
   protected def shutdownComplete(): Unit = shutdownLatch.countDown()
 
   /**
@@ -555,7 +557,9 @@ private[kafka] abstract class AbstractServerThread(connectionQuotas: ConnectionQ
   def close(listenerName: ListenerName, channel: SocketChannel): Unit = {
     if (channel != null) {
       debug(s"Closing connection from ${channel.socket.getRemoteSocketAddress}")
+      // 修改connectionQuotas记录的连接数
       connectionQuotas.dec(listenerName, channel.socket.getInetAddress)
+      // 关闭连接
       closeSocket(channel)
     }
   }
@@ -760,8 +764,9 @@ private[kafka] class Acceptor(val endPoint: EndPoint,// 定义的 Kafka Broker �
    */
   private def accept(key: SelectionKey): Option[SocketChannel] = {
     val serverSocketChannel = key.channel().asInstanceOf[ServerSocketChannel]
-    val socketChannel = serverSocketChannel.accept()
+    val socketChannel = serverSocketChannel.accept() // 创建SocketChannel
     try {
+      // 增加connectionQuotas中记录的连接数
       connectionQuotas.inc(endPoint.listenerName, socketChannel.socket.getInetAddress, blockedPercentMeter)
       socketChannel.configureBlocking(false)
       socketChannel.socket().setTcpNoDelay(true)
@@ -935,6 +940,7 @@ private[kafka] class Processor(val id: Int,
           configureNewConnections() // 创建新连接
           // register any new responses for writing
           processNewResponses()// 发送Response，并将Response放入到inflightRespon
+          // 读取请求，发送响应
           poll() // 执行NIO poll，获取对应SocketChannel上准备就绪的I/O操作
           processCompletedReceives() // 将接收到的Request放入Request队列
           processCompletedSends() // 为临时Response队列中的Response执行回调逻辑
@@ -953,6 +959,7 @@ private[kafka] class Processor(val id: Int,
     } finally { // 关闭底层资源
       debug(s"Closing selector - processor $id")
       CoreUtils.swallow(closeAll(), this, Level.ERROR)
+      // 执行一系列的关闭操作
       shutdownComplete()
     }
   }
@@ -987,6 +994,7 @@ private[kafka] class Processor(val id: Int,
             // it will be unmuted immediately. If the channel has been throttled, it will be unmuted only if the
             // throttling delay has already passed by now.
             handleChannelMuteEvent(channelId, ChannelMuteEvent.RESPONSE_SENT)
+            // 注册OP_READ事件
             tryUnmuteChannel(channelId)
 
           case response: SendResponse => // 发送Response并将Response放入inflightR
@@ -1060,6 +1068,7 @@ private[kafka] class Processor(val id: Int,
         // 保证对应连接通道已经建立
         // 打开与发送方对应的Socket Channel，如果不存在可用的Channel，抛出异常
         openOrClosingChannel(receive.source) match {
+            // 获取请求对应的channel
           case Some(channel) =>
             val header = parseRequestHeader(receive.payload)
             if (header.apiKey == ApiKeys.SASL_HANDSHAKE && channel.maybeBeginServerReauthentication(receive,
@@ -1095,6 +1104,7 @@ private[kafka] class Processor(val id: Int,
                 }
                 // 核心代码：将Request添加到Request队列
                 requestChannel.sendRequest(req)
+                // 取消注册的OP_READ事件，连接不再读取数据
                 selector.mute(connectionId)
                 handleChannelMuteEvent(connectionId, ChannelMuteEvent.REQUEST_RECEIVED)
               }
@@ -1132,6 +1142,7 @@ private[kafka] class Processor(val id: Int,
         // it will be unmuted immediately. If the channel has been throttled, it will unmuted only if the throttling
         // delay has already passed by now.
         handleChannelMuteEvent(send.destinationId, ChannelMuteEvent.RESPONSE_SENT)
+        // 注册OP_READ事件，允许此连接继续读取数据
         tryUnmuteChannel(send.destinationId)
       } catch {
         case e: Throwable => processChannelException(send.destinationId,
@@ -1213,8 +1224,10 @@ private[kafka] class Processor(val id: Int,
       } else
         false
     }
-    if (accepted)
+    if (accepted) {
+      // Processor.wakeup方法通过Selector.wakeup，调用jdk底层NIO Selector的wakeup方法
       wakeup()
+    }
     accepted
   }
 

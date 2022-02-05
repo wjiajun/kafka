@@ -347,6 +347,7 @@ class Log(@volatile var logStartOffset: Long,// 表示日志的当前最早位�
 
   def name: String = localLog.name
 
+  // 指定恢复操作的起始offset，recoveryPoint之前的Message已经刷新到磁盘上持久存储，而其后的消息则不一定，出现宕机时可能会丢失。所以只需要恢复recoveryPoint之后的消息即可
   def recoveryPoint: Long = localLog.recoveryPoint
 
   def topicPartition: TopicPartition = localLog.topicPartition
@@ -762,6 +763,7 @@ class Log(@volatile var logStartOffset: Long,// 表示日志的当前最早位�
     maybeFlushMetadataFile()
 
     // 第1步：分析和验证待写入消息集合，并返回校验结果
+    // 检测消息长度和CRC32校验码
     val appendInfo = analyzeAndValidateRecords(records, origin, ignoreRecordSize, leaderEpoch)
 
     // 如果压根就不需要写入任何消息，直接返回即可
@@ -771,6 +773,7 @@ class Log(@volatile var logStartOffset: Long,// 表示日志的当前最早位�
 
       // 第2步：消息格式规整，即删除无效格式消息或无效字节
       // trim any invalid bytes or partial messages before appending it to the on-disk log
+      // 将未通过analyzeAndValidateRecords检测的部分截断
       var validRecords = trimInvalidBytes(records, appendInfo)
 
       // they are valid, insert them in the log
@@ -781,10 +784,12 @@ class Log(@volatile var logStartOffset: Long,// 表示日志的当前最早位�
             // assign offsets to the message set
             // 第3步：使用当前LEO值作为待写入消息集合中第一条消息的位移值
             val offset = new LongRef(localLog.logEndOffset)
+            // 使用firstOffset字段记录第一条消息的offset，并不受压缩消息的影响
             appendInfo.firstOffset = Some(LogOffsetMetadata(offset.value))
             val now = time.milliseconds
             // 第4步：验证消息，确保消息大小不超限
             val validateAndOffsetAssignResult = try {
+              // 进一步验证，并分配offset
               LogValidator.validateMessagesAndAssignOffsets(validRecords,
                 topicPartition,
                 offset,
@@ -810,10 +815,11 @@ class Log(@volatile var logStartOffset: Long,// 表示日志的当前最早位�
             validRecords = validateAndOffsetAssignResult.validatedRecords
             appendInfo.maxTimestamp = validateAndOffsetAssignResult.maxTimestamp
             appendInfo.offsetOfMaxTimestamp = validateAndOffsetAssignResult.shallowOffsetOfMaxTimestamp
+            // 记录最后一条消息的offset，不受压缩消息的影响
             appendInfo.lastOffset = offset.value - 1
             appendInfo.recordConversionStats = validateAndOffsetAssignResult.recordConversionStats
             if (config.messageTimestampType == TimestampType.LOG_APPEND_TIME)
-              appendInfo.logAppendTime = now
+              appendInfo.logAppendTime = now// 修改时间戳
 
             // re-validate message sizes if there's a possibility that they have changed (due to re-compression or message
             // format conversion)
@@ -1079,13 +1085,13 @@ class Log(@volatile var logStartOffset: Long,// 表示日志的当前最早位�
                                         origin: AppendOrigin,
                                         ignoreRecordSize: Boolean,
                                         leaderEpoch: Int): LogAppendInfo = {
-    var shallowMessageCount = 0
-    var validBytesCount = 0
-    var firstOffset: Option[LogOffsetMetadata] = None
-    var lastOffset = -1L
+    var shallowMessageCount = 0 // 记录外层消息的数量
+    var validBytesCount = 0 // 记录通过验证的message字节数之和
+    var firstOffset: Option[LogOffsetMetadata] = None // 第一条消息offset
+    var lastOffset = -1L// 最后一条消息offset
     var lastLeaderEpoch = RecordBatch.NO_PARTITION_LEADER_EPOCH
     var sourceCodec: CompressionCodec = NoCompressionCodec
-    var monotonic = true
+    var monotonic = true // 生产者为消息分配的内部offset是否单调递增
     var maxTimestamp = RecordBatch.NO_TIMESTAMP
     var offsetOfMaxTimestamp = -1L
     var readFirstMessage = false
@@ -1108,8 +1114,10 @@ class Log(@volatile var logStartOffset: Long,// 表示日志的当前最早位�
       // case, validation will be more lenient.
       // Also indicate whether we have the accurate first offset or not
       if (!readFirstMessage) {
-        if (batch.magic >= RecordBatch.MAGIC_VALUE_V2)
-          firstOffset = Some(LogOffsetMetadata(batch.baseOffset)) // 更新firstOffset字段
+        if (batch.magic >= RecordBatch.MAGIC_VALUE_V2) {
+          // 记录第一条消息的offset，此时的offset还是生产者分配的offset
+          firstOffset = Some(LogOffsetMetadata(batch.baseOffset))
+        } // 更新firstOffset字段
         lastOffsetOfFirstBatch = batch.lastOffset  // 更新lastOffsetOfFirstBatch
         readFirstMessage = true
       }
@@ -1150,12 +1158,15 @@ class Log(@volatile var logStartOffset: Long,// 表示日志的当前最早位�
 
       // 累加消息批次计数器以及有效字节数，更新shallowMessageCount字段
       shallowMessageCount += 1
+      // 增加通过检测的字节数
       validBytesCount += batchSize
 
       // 从消息批次中获取压缩器类型
       val messageCodec = CompressionCodec.getCompressionCodec(batch.compressionType.id)
-      if (messageCodec != NoCompressionCodec)
+      if (messageCodec != NoCompressionCodec) {
+        // 记录生产者采用的压缩方式
         sourceCodec = messageCodec
+      }
     }
 
     // 获取Broker端设置的压缩器类型，即Broker端参数compression.type值。
@@ -1415,6 +1426,7 @@ class Log(@volatile var logStartOffset: Long,// 表示日志的当前最早位�
     val startMs = time.milliseconds
 
     def shouldDelete(segment: LogSegment, nextSegmentOpt: Option[LogSegment]): Boolean = {
+      // 在最近一段时间（retentionMs）内没有被修改
       startMs - segment.largestTimestamp > config.retentionMs
     }
 
@@ -1506,6 +1518,7 @@ class Log(@volatile var logStartOffset: Long,// 表示日志的当前最早位�
 
       roll(Some(rollOffset))
     } else {
+      // 不需要创建新的segment直接返回当前active segment
       segment
     }
   }

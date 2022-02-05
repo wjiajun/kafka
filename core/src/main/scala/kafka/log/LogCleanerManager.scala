@@ -70,10 +70,12 @@ private[log] class LogCleanerManager(val logDirs: Seq[File],
   private[log] val offsetCheckpointFile = "cleaner-offset-checkpoint"
 
   /* the offset checkpoints holding the last cleaned point for each log */
+  // 维护data数据目录与cleaneroffset-checkpoint文件之间的对应关系
   @volatile private var checkpoints = logDirs.map(dir =>
     (dir, new OffsetCheckpointFile(new File(dir, offsetCheckpointFile), logDirFailureChannel))).toMap
 
   /* the set of logs currently being cleaned */
+  // 用于记录正在进行清理的TopicAndPartition的压缩状态
   private val inProgress = mutable.HashMap[TopicPartition, LogCleaningState]()
 
   /* the set of uncleanable partitions (partitions that have raised an unexpected error during cleaning)
@@ -168,12 +170,15 @@ private[log] class LogCleanerManager(val logDirs: Seq[File],
     inLock(lock) {
       val now = time.milliseconds
       this.timeOfLastRun = now
+      // 拿到全部Log的cleaner checkpoint
       val lastClean = allCleanerCheckpoints
       val dirtyLogs = logs.filter {
+              // 过滤掉配置项为delete的Log
         case (_, log) => log.config.compact  // match logs that are marked as compacted
       }.filterNot {
         case (topicPartition, log) =>
           // skip any logs already in-progress and uncleanable partitions
+          // 过滤掉包含inProgress状态的Log
           inProgress.contains(topicPartition) || isUncleanablePartition(log, topicPartition)
       }.map {
         case (topicPartition, log) => // create a LogToClean instance for each
@@ -186,6 +191,7 @@ private[log] class LogCleanerManager(val logDirs: Seq[File],
             val compactionDelayMs = maxCompactionDelay(log, offsetsToClean.firstDirtyOffset, now)
             preCleanStats.updateMaxCompactionDelay(compactionDelayMs)
 
+            // 为每个Log创建一个LogToClean对象，在LogToClean对象中维护了每个Log的clean部分字节数，dirty字节数以及cleanableRatio
             LogToClean(topicPartition, log, offsetsToClean.firstDirtyOffset, offsetsToClean.firstUncleanableDirtyOffset, compactionDelayMs > 0)
           } catch {
             case e: Throwable => throw new LogCleaningException(log,
@@ -193,18 +199,22 @@ private[log] class LogCleanerManager(val logDirs: Seq[File],
           }
       }.filter(ltc => ltc.totalBytes > 0) // skip any empty logs
 
+      // dirtyLogs集合中cleanableRatio的最大值
       this.dirtiestLogCleanableRatio = if (dirtyLogs.nonEmpty) dirtyLogs.max.cleanableRatio else 0
       // and must meet the minimum threshold for dirty byte ratio or have some bytes required to be compacted
+      // 过滤掉cleanableRatio小于配置的minCleanableRatio 的值
       val cleanableLogs = dirtyLogs.filter { ltc =>
         (ltc.needCompactionNow && ltc.cleanableBytes > 0) || ltc.cleanableRatio > ltc.log.config.minCleanableRatio
       }
       if(cleanableLogs.isEmpty) {
         None
       } else {
+        // 选择要压缩的Log
         preCleanStats.recordCleanablePartitions(cleanableLogs.size)
         val filthiest = cleanableLogs.max
+        // 更新（或添加）此分区对应的压缩状态
         inProgress.put(filthiest.topicPartition, LogCleaningInProgress)
-        Some(filthiest)
+        Some(filthiest) // 返回要压缩的日志对应的LogToClean对象
       }
     }
   }
@@ -364,9 +374,11 @@ private[log] class LogCleanerManager(val logDirs: Seq[File],
   def updateCheckpoints(dataDir: File, partitionToUpdateOrAdd: Option[(TopicPartition, Long)] = None,
                         partitionToRemove: Option[TopicPartition] = None): Unit = {
     inLock(lock) {
+      // 获取指定log目录对应的cleaner-offset-checkpoint文件
       val checkpoint = checkpoints(dataDir)
       if (checkpoint != null) {
         try {
+          // update对相同key的value进行覆盖
           val currentCheckpoint = checkpoint.read().filter { case (tp, _) => logs.keys.contains(tp) }.toMap
           // remove the partition offset if any
           var updatedCheckpoint = partitionToRemove match {
@@ -379,6 +391,7 @@ private[log] class LogCleanerManager(val logDirs: Seq[File],
             case None => updatedCheckpoint
           }
 
+          // 更新cleaner-offset-checkpoint文件
           checkpoint.write(updatedCheckpoint)
         } catch {
           case e: KafkaStorageException =>
@@ -568,7 +581,9 @@ private[log] object LogCleanerManager extends Logging {
     // If the log segments are abnormally truncated and hence the checkpointed offset is no longer valid;
     // reset to the log starting offset and log the error
     val (firstDirtyOffset, forceUpdateCheckpoint) = {
+      // 获取Log中第一条消息的offset
       val logStartOffset = log.logStartOffset
+      // 决定最终的压缩开始的位置，firstDirtyOffset可能是logStartOffset 也可以是clean checkpoint
       val checkpointDirtyOffset = lastCleanOffset.getOrElse(logStartOffset)
 
       if (checkpointDirtyOffset < logStartOffset) {

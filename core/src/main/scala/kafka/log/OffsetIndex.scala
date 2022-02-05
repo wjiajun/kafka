@@ -50,6 +50,11 @@ import org.apache.kafka.common.errors.InvalidOffsetException
  * storage format.
  */
 // Avoid shadowing mutable `file` in AbstractIndex
+// ·_file：指向磁盘上的索引文件。
+// ·baseOffset：对应日志文件中第一个消息的offset。
+// ·mmap：用来操作索引文件的MappedByteBuffer。
+// ·lock：ReentrantLock对象，在对mmap进行操作时，需要加锁保护。
+// ·_entries：当前索引文件中的索引项个数
 class OffsetIndex(_file: File, baseOffset: Long, maxIndexSize: Int = -1, writable: Boolean = true)
     extends AbstractIndex(_file, baseOffset, maxIndexSize, writable) {
   import OffsetIndex._
@@ -92,10 +97,12 @@ class OffsetIndex(_file: File, baseOffset: Long, maxIndexSize: Int = -1, writabl
       val slot = largestLowerBoundSlotFor(idx, targetOffset, IndexSearchType.KEY)
       // 如果没找到，返回一个空的位置，即物理文件位置从0开始，表示从头读日志文件
       // 否则返回slot槽对应的索引项
-      if(slot == -1)
+      if(slot == -1) {
+        // 将offset和物理地址封装成OffsetPosition对象并返回
         OffsetPosition(baseOffset, 0)
-      else
+      } else {
         parseEntry(idx, slot)
+      }
     }
   }
 

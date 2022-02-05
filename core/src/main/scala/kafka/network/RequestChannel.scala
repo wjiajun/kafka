@@ -98,6 +98,7 @@ object RequestChannel extends Logging {
 
     val session = Session(context.principal, context.clientAddress)
 
+    // 解析请求体
     private val bodyAndSize: RequestAndSize = context.parseRequest(buffer)
 
     // This is constructed on creation of a Request so that the JSON representation is computed before the request is
@@ -106,6 +107,7 @@ object RequestChannel extends Logging {
       if (RequestChannel.isRequestLoggingEnabled) Some(RequestConvertToJson.request(loggableRequest))
       else None
 
+    // 请求头
     def header: RequestHeader = context.header
 
     def sizeOfBodyInBytes: Int = bodyAndSize.size
@@ -389,6 +391,7 @@ class RequestChannel(val queueSize: Int,//  queued.max.requests  Request 队列�
     onComplete: Option[Send => Unit]
   ): Unit = {
     updateErrorMetrics(request.header.apiKey, response.errorCounts.asScala)
+    // 向responseQueue队列添加Response
     sendResponse(new RequestChannel.SendResponse(
       request,
       request.buildResponseSend(response),

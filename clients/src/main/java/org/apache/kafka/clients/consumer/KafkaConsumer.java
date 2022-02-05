@@ -570,9 +570,11 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     private Logger log;
     private final String clientId;
     private final Optional<String> groupId;
+    // 完成rebalance操作，并提交最近的请求
     private final ConsumerCoordinator coordinator;
     private final Deserializer<K> keyDeserializer;
     private final Deserializer<V> valueDeserializer;
+    // 从Kafka中拉取消息并进行解析，同时参与position的重置操作，提供获取指定Topic的集群元数据的操作
     private final Fetcher<K, V> fetcher;
     private final ConsumerInterceptors<K, V> interceptors;
     private final IsolationLevel isolationLevel;
@@ -580,7 +582,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     private final Time time;
     // 负责消费者与Kafka服务端的网络通信
     private final ConsumerNetworkClient client;
-    // 维护了消费者的消费状态
+    // 管理订阅的Topic集合、维护了消费者的消费状态
     private final SubscriptionState subscriptions;
     private final ConsumerMetadata metadata;
     private final long retryBackoffMs;
@@ -1217,6 +1219,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @throws KafkaException if the rebalance callback throws exception
      */
     private ConsumerRecords<K, V> poll(final Timer timer, final boolean includeMetadataInTimeout) {
+        // 防止多线程
         acquireAndEnsureOpen();
         try {
             this.kafkaConsumerMetrics.recordPollStart(timer.currentTimeMs());
@@ -1230,6 +1233,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
                 if (includeMetadataInTimeout) {
                     // try to update assignment metadata BUT do not need to block on the timer for join group
+                    // 恢复subscriptions对应的TopicPartitionState状态
                     updateAssignmentMetadataIfNeeded(timer, false);
                 } else {
                     while (!updateAssignmentMetadataIfNeeded(time.timer(Long.MAX_VALUE), true)) {
@@ -1245,12 +1249,17 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                     //
                     // NOTE: since the consumed position has already been updated, we must not allow
                     // wakeups or any other errors to be triggered prior to returning the fetched records.
+                    // 为了提升效率，在对records集合进行处理之前，先发送一次FetchRequest。这样线程处理完成本次records集合操作
+                    // 与FetchRequest及其响应在网络上传输以及在服务端的处理就变成并行了，从而减少网络的等待时间
+                    // fetcher.sendFetches() 创建并缓存
                     if (fetcher.sendFetches() > 0 || client.hasPendingRequests()) {
                         client.transmitSends();
                     }
 
+                    // 调用ConsumerInterceptors
                     return this.interceptors.onConsume(new ConsumerRecords<>(records));
                 }
+                // 计算超时时间
             } while (timer.notExpired());
 
             return ConsumerRecords.empty();
@@ -1277,6 +1286,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
         // if data is available already, return it immediately
         // 如果缓存里面有未读取的消息，直接返回这些消息
+        // 从缓存completedFetches中解析消息
         final Map<TopicPartition, List<ConsumerRecord<K, V>>> records = fetcher.fetchedRecords();
         if (!records.isEmpty()) {
             return records;
@@ -1284,6 +1294,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
         // send any new fetches (won't resend pending fetches)
         // 构造拉取消息请求，并发送
+        // 创建并缓存FetchRequest请求
         fetcher.sendFetches();
 
         // We do not want to be stuck blocking in poll if we are missing some positions
@@ -1306,6 +1317,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         });
         timer.update(pollTimer.currentTimeMs());
 
+        // 从缓存completedFetches中解析消息
         return fetcher.fetchedRecords();
     }
 

@@ -37,11 +37,11 @@ public abstract class AbstractIterator<T> implements Iterator<T> {
         switch (state) {
             case FAILED:
                 throw new IllegalStateException("Iterator is in failed state");
-            case DONE:
+            case DONE: // 迭代结束
                 return false;
-            case READY:
+            case READY: // next项已经准备好
                 return true;
-            default:
+            default: // NOT_READY状态，需要调用maybeComputeNext 获取 next项
                 return maybeComputeNext();
         }
     }
@@ -50,7 +50,7 @@ public abstract class AbstractIterator<T> implements Iterator<T> {
     public T next() {
         if (!hasNext())
             throw new NoSuchElementException();
-        state = State.NOT_READY;
+        state = State.NOT_READY;// 将state重置为NOT_READY状态
         if (next == null)
             throw new IllegalStateException("Expected item but none found.");
         return next;

@@ -106,17 +106,22 @@ import java.util.concurrent.atomic.AtomicInteger
  *  currentTime：当前时间戳，只是源码对它进行了一些微调整，将它设置成小于当前时间的最大滴答时长的整数倍。举个例子，假设滴答时长是 20 毫秒，当前时间戳是 123 毫秒，那么，currentTime 会被调整为 120 毫秒。
  *  overflowWheel：Kafka 是按需创建上层时间轮的。这也就是说，当有新的定时任务到达时，会尝试将其放入第 1 层时间轮。如果第 1 层的 interval 无法容纳定时任务的超时时间，就现场创建并配置好第 2 层时间轮，并再次尝试放入，如果依然无法容纳，那么，就再创建和配置第 3 层时间轮，以此类推，直到找到适合容纳该定时任务的第 N 层时间轮。
  *  目前 Clients 端默认的请求超时时间是 30 秒，按照现在代码中的wheelSize=20 进行倍增，只需要 4 层时间轮，就能容纳 160 秒以内的所有延时请求了。
+ *  queue：DelayQueue类型，整个层级时间轮共用的一个任务队列，其元素类型是TimerTaskList（实现了Delayed接口）
  */
 @nonthreadsafe
 private[timer] class TimingWheel(tickMs: Long, wheelSize: Int, startMs: Long, taskCounter: AtomicInteger, queue: DelayQueue[TimerTaskList]) {
 
+  // 当前时间轮的时间跨度，即tickMs*wheelSize。当前时间轮只能处理时间范围在currentTime~currentTime+tickMs*WheelSize之间的定时任务，超过这个范围，则需要将任务添加到上层时间轮中
   private[this] val interval = tickMs * wheelSize
+  // 其每一个项都对应时间轮中的一个时间格，用于保存TimerTaskList的数组
   private[this] val buckets = Array.tabulate[TimerTaskList](wheelSize) { _ => new TimerTaskList(taskCounter) }
 
+  // 时间轮的指针，将整个时间轮划分为到期部分和未到期部分
   private[this] var currentTime = startMs - (startMs % tickMs) // rounding down to multiple of tickMs
 
   // overflowWheel can potentially be updated and read by two concurrent threads through add().
   // Therefore, it needs to be volatile due to the issue of Double-Checked Locking pattern with JVM
+  // 上层时间轮的引用
   @volatile private[this] var overflowWheel: TimingWheel = null
 
   private[this] def addOverflowWheel(): Unit = {

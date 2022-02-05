@@ -94,23 +94,28 @@ class CheckpointFile[T](val file: File,
         val fileOutputStream = new FileOutputStream(tempPath.toFile)
         val writer = new BufferedWriter(new OutputStreamWriter(fileOutputStream, StandardCharsets.UTF_8))
         try {
+          // 写入当前版本号
           writer.write(version.toString)
           writer.newLine()
 
+          // 写入记录条数
           writer.write(entries.size.toString)
           writer.newLine()
 
+          // 循环写入topic名称、分区编号以及对应的log的recoveryPoint
           entries.foreach { entry =>
             writer.write(formatter.toLine(entry))
             writer.newLine()
           }
 
           writer.flush()
+          // 将写入数据刷新到磁盘
           fileOutputStream.getFD().sync()
         } finally {
           writer.close()
         }
 
+        // 使用tmp临时文件替换原来的RecoveryPointCheckpoint文件
         Utils.atomicMoveWithFallback(tempPath, path)
       } catch {
         case e: IOException =>

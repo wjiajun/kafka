@@ -77,11 +77,12 @@ class KafkaScheduler(val threads: Int,
     this synchronized {
       if(isStarted)
         throw new IllegalStateException("This scheduler has already been started!")
-      executor = new ScheduledThreadPoolExecutor(threads)
+      executor = new ScheduledThreadPoolExecutor(threads)// 配置线程数
       executor.setContinueExistingPeriodicTasksAfterShutdownPolicy(false)
       executor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false)
       executor.setRemoveOnCancelPolicy(true)
       executor.setThreadFactory(runnable =>
+        // 默认都是使用守护线程
         new KafkaThread(threadNamePrefix + schedulerThreadId.getAndIncrement(), runnable, daemon))
     }
   }

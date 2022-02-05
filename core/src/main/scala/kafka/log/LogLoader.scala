@@ -385,6 +385,7 @@ object LogLoader extends Logging {
       params.time,
       reloadFromCleanShutdown = false,
       params.logIdentifier)
+    // 重建索引文件并验证日志文件，验证失败的部分截掉
     val bytesTruncated = segment.recover(producerStateManager, params.leaderEpochCache)
     // once we have recovered the segment's data, take a snapshot to ensure that we won't
     // need to reload the same segment again while recovering another segment.
@@ -430,7 +431,7 @@ object LogLoader extends Logging {
     // If we have the clean shutdown marker, skip recovery.
     // 如果不存在以.kafka_cleanshutdown结尾的文件。通常都不存在
     if (!params.hadCleanShutdown) {
-      // 获取到上次恢复点以外的所有unflushed日志段对象
+      // 获取到上次恢复点以外的所有unflushed日志段对象(获取全部未刷新的LogSegment，即recoveryPoint之后的全部LogSegment)
       val unflushed = params.segments.values(params.recoveryPointCheckpoint, Long.MaxValue).iterator
       var truncated = false
 
@@ -449,10 +450,12 @@ object LogLoader extends Logging {
                 s" corrupt segment and creating an empty one with starting offset $startOffset")
               segment.truncateTo(startOffset)
           }
+        // 有验证失败的消息
         if (truncatedBytes > 0) {// 如果有无效的消息导致被截断的字节数不为0，直接删除
           // we had an invalid message, delete all remaining log
           warn(s"${params.logIdentifier}Corruption found in segment ${segment.baseOffset}," +
             s" truncating to offset ${segment.readNextOffset}")
+          // 剩余部分删除
           removeAndDeleteSegmentsAsync(unflushed.toList, params)
           truncated = true
         }

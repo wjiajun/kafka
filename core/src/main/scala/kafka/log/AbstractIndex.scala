@@ -114,8 +114,8 @@ abstract class AbstractIndex(@volatile private var _file: File, val baseOffset: 
     val raf = if (writable) new RandomAccessFile(file, "rw") else new RandomAccessFile(file, "r")
     try {
       /* pre-allocate the file if necessary */
-      if(newlyCreated) {
-        if(maxIndexSize < entrySize) // 预设的索引文件大小不能太小，如果连一个索引
+      if(newlyCreated) {// 对于新创建的索引文件，进行扩容
+        if(maxIndexSize < entrySize) // 预设的索引文件大小不能太小
           throw new IllegalArgumentException("Invalid max index size: " + maxIndexSize)
         // 第3步：设置索引文件长度，roundDownToExactMultiple计算的是不超过maxInde
         // 比如maxIndexSize=1234567，entrySize=8，那么调整后的文件长度为1234560
