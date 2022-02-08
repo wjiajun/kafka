@@ -135,8 +135,8 @@ private[timer] class TimingWheel(tickMs: Long, wheelSize: Int, startMs: Long, ta
           tickMs = interval,
           wheelSize = wheelSize,
           startMs = currentTime,
-          taskCounter = taskCounter,
-          queue
+          taskCounter = taskCounter,// 全局唯一计时器
+          queue // 全局唯一队列
         )
       }
     }

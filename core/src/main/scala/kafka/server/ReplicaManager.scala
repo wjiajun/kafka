@@ -620,10 +620,12 @@ class ReplicaManager(val config: KafkaConfig, // 配置管理类
     if (isValidRequiredAcks(requiredAcks)) {
       val sTime = time.milliseconds
       // 调用appendToLocalLog方法写入消息集合到本地日志
+      // 将消息追加到Log中，同时还会检测delayedProducePurgatory对应的DelayedFetch，满足条件则将其执行完成
       val localProduceResults = appendToLocalLog(internalTopicsAllowed = internalTopicsAllowed,
         origin, entriesPerPartition, requiredAcks, requestLocal)
       debug("Produce to local log in %d ms".format(time.milliseconds - sTime))
 
+      // 对追加结果进行转换，注意ProducePartitionStatus参数
       val produceStatus = localProduceResults.map { case (topicPartition, result) =>
         topicPartition -> ProducePartitionStatus(
           result.info.lastOffset + 1, // required offset  // 设置下一条待写入消息的位移值
@@ -662,7 +664,7 @@ class ReplicaManager(val config: KafkaConfig, // 配置管理类
       // 尝试更新消息格式转换的指标数据
       recordConversionStatsCallback(localProduceResults.map { case (k, v) => k -> v.info.recordConversionStats })
 
-      // 需要等待其他副本完成写入
+      // 检测是否需要等待其他副本完成写入
       if (delayedProduceRequestRequired(requiredAcks, entriesPerPartition, localProduceResults)) {
         // create delayed produce operation
         val produceMetadata = ProduceMetadata(requiredAcks, produceStatus)
@@ -1081,6 +1083,7 @@ class ReplicaManager(val config: KafkaConfig, // 配置管理类
     val fetchOnlyFromLeader = isFromFollower || (isFromConsumer && clientMetadata.isEmpty)
     // 定义readFromLog方法读取底层日志中的消息
     def readFromLog(): Seq[(TopicPartition, LogReadResult)] = {
+      // 从log中读取消息
       val result = readFromLocalLog(
         replicaId = replicaId,
         fetchOnlyFromLeader = fetchOnlyFromLeader,
@@ -1099,7 +1102,9 @@ class ReplicaManager(val config: KafkaConfig, // 配置管理类
     val logReadResults = readFromLog()
 
     // check if this fetch request can be satisfied right away
+    // 从Log中读取的字节总数
     var bytesReadable: Long = 0
+    // 读取消息时是否发生了异常
     var errorReadingData = false
     var hasDivergingEpoch = false
     val logReadResultMap = new mutable.HashMap[TopicPartition, LogReadResult]
@@ -1110,8 +1115,9 @@ class ReplicaManager(val config: KafkaConfig, // 配置管理类
 
       if (logReadResult.error != Errors.NONE)
         errorReadingData = true
-      if (logReadResult.divergingEpoch.nonEmpty)
+      if (logReadResult.divergingEpoch.nonEmpty) {
         hasDivergingEpoch = true
+      }
       bytesReadable = bytesReadable + logReadResult.info.records.sizeInBytes
       logReadResultMap.put(topicPartition, logReadResult)
     }
@@ -1123,8 +1129,8 @@ class ReplicaManager(val config: KafkaConfig, // 配置管理类
     //                        5) we found a diverging epoch
     // 判断是否能够立即返回Reponse，满足以下4个条件中的任意一个即可：
     // 1. 请求没有设置超时时间，说明请求方想让请求被处理后立即返回
-    // 2. 未获取到任何数据
-    // 3. 已累积到足够多的数据
+    // 2. 未获取到任何数据,没有指定要读取的分区，即fetchInfo.size <= 0
+    // 3. 已累积到足够多的数据，bytesReadable >= fetchMinBytes
     // 4. 读取过程中出错
     if (timeout <= 0 || fetchInfos.isEmpty || bytesReadable >= fetchMinBytes || errorReadingData || hasDivergingEpoch) {
       // 构建返回结果
@@ -1132,7 +1138,7 @@ class ReplicaManager(val config: KafkaConfig, // 配置管理类
         val isReassignmentFetch = isFromFollower && isAddingReplica(tp, replicaId)
         tp -> result.toFetchPartitionData(isReassignmentFetch)
       }
-      // 调用回调函数
+      // 调用回调函数，生成并发送FetchReponse
       responseCallback(fetchPartitionData)
     } else { // 如果无法立即完成请求
       // construct the fetch results from the read results
@@ -1140,6 +1146,7 @@ class ReplicaManager(val config: KafkaConfig, // 配置管理类
       fetchInfos.foreach { case (topicPartition, partitionData) =>
         logReadResultMap.get(topicPartition).foreach(logReadResult => {
           val logOffsetMetadata = logReadResult.info.fetchOffsetMetadata
+          // 对Log读取结果进行转换DelayedFetch的
           fetchPartitionStatus += (topicPartition -> FetchPartitionStatus(logOffsetMetadata, partitionData))
         })
       }

@@ -590,6 +590,7 @@ class KafkaApis(val requestChannel: RequestChannel, // 请求通道
     // https://issues.apache.org/jira/browse/KAFKA-10730
     @nowarn("cat=deprecation")
     def sendResponseCallback(responseStatus: Map[TopicPartition, PartitionResponse]): Unit = {
+      // 生成响应状态集合，其中包括通过授权验证并处理完成的状态（responseStatus），以及未通过授权验证的状态
       val mergedResponseStatus = responseStatus ++ unauthorizedTopicResponses ++ nonExistingTopicResponses ++ invalidRequestResponses
       var errorInResponse = false
 
@@ -623,6 +624,7 @@ class KafkaApis(val requestChannel: RequestChannel, // 请求通道
       }
 
       // Send the response immediately. In case of throttling, the channel has already been muted.
+      // acks = 0，即生产者不需要服务端返回响应
       if (produceRequest.acks == 0) {
         // no operation needed if producer request.required.acks = 0; however, if there is any error in handling
         // the request, since no response is expected by the producer, the server will close socket server so that
@@ -636,13 +638,17 @@ class KafkaApis(val requestChannel: RequestChannel, // 请求通道
               s"from client id ${request.header.clientId} with ack=0\n" +
               s"Topic and partition to exceptions: $exceptionsSummary"
           )
+          // 处理ProducerRequest过程中出现的异常，向对应的response中添加RequestChannel.CloseConnectAction类型响应，关闭连接
           requestChannel.closeConnection(request, new ProduceResponse(mergedResponseStatus.asJava).errorCounts)
         } else {
           // Note that although request throttling is exempt for acks == 0, the channel may be throttled due to
           // bandwidth quota violation.
+          // 未出现异常，向对应reponseQueue中添加NoOptionAction类型响应，继续读取客户端请求
           requestHelper.sendNoOpResponseExemptThrottle(request)
         }
       } else {
+        // 处理ack = 1 / -1 情况，即生产者需要服务端响应
+        // 向对应的responseQueue中添加SendAction类型响应，将响应返回给客户端
         requestChannel.sendResponse(request, new ProduceResponse(mergedResponseStatus.asJava, maxThrottleTimeMs), None)
       }
     }

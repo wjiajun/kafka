@@ -301,8 +301,9 @@ public class FileRecords extends AbstractRecords implements Closeable {
                     "Size of FileRecords %s has been truncated during write: old size %d, new size %d",
                     file.getAbsolutePath(), oldSize, newSize));
 
-        long position = start + offset;
-        long count = Math.min(length, oldSize - offset);
+        long position = start + offset;// 计算起始位置
+        long count = Math.min(length, oldSize - offset); // 计算发送字节数
+        // 调用fileChannel.transferTo 方法实现零拷贝
         return destChannel.transferFrom(channel, position, count);
     }
 

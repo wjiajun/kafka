@@ -44,10 +44,13 @@ class Replica(val brokerId: Int, val topicPartition: TopicPartition) extends Log
 
   def logStartOffset: Long = _logStartOffset
 
+  // 对于本地副本，此字段记录的是追加到Log中的最新消息的offset，可以直接从Log.nextOffsetMetadata字段中获取。
+  // 对于远程副本，此字段含义相同，但是由其他Broker发送请求来更新此值，并不能直接从本地获取到
   def logEndOffsetMetadata: LogOffsetMetadata = _logEndOffsetMetadata
 
   def logEndOffset: Long = logEndOffsetMetadata.messageOffset
 
+  // 记录Follower副本最后一次追赶上Leader的时间戳
   def lastCaughtUpTimeMs: Long = _lastCaughtUpTimeMs
 
   /*

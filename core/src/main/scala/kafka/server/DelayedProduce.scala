@@ -50,20 +50,25 @@ case class ProduceMetadata(produceRequiredAcks: Short,
  * A delayed produce operation that can be created by the replica manager and watched
  * in the produce operation purgatory
  */
-class DelayedProduce(delayMs: Long,
-                     produceMetadata: ProduceMetadata,
+class DelayedProduce(delayMs: Long, // DelayedProduce的延迟时长
+                     produceMetadata: ProduceMetadata, // ProduceMetadata中为一个ProducerRequest中的所有相关分区记录了一些追加消息后的返回结果，主要用于判断DelayedProduce是否满足执行条件
                      replicaManager: ReplicaManager,
                      responseCallback: Map[TopicPartition, PartitionResponse] => Unit,
                      lockOpt: Option[Lock] = None)
   extends DelayedOperation(delayMs, lockOpt) {
 
   // first update the acks pending variable according to the error code
+  // 根据前面写入消息的返回结果，设置ProducePartitionStatus的ackPending字段和responseStatus字段的值
   produceMetadata.produceStatus.forKeyValue { (topicPartition, status) =>
     if (status.responseStatus.error == Errors.NONE) {
       // Timeout error state will be cleared when required acks are received
+      // 对应分区写入成功，等待ISR集合中的副本完成同步
+      // 如果写入异常，分区不需要等待
       status.acksPending = true
+      // 预设错误码，如果ISR集合中的副本在此请求超时之前顺利完成了同步，会清除错误码
       status.responseStatus.error = Errors.REQUEST_TIMED_OUT
     } else {
+      // 追加日志已经抛出异常，则不必等待此Partition对应ISR返回ACK
       status.acksPending = false
     }
 
@@ -79,24 +84,29 @@ class DelayedProduce(delayMs: Long,
    *   B.1 - If there was a local error thrown while checking if at least requiredAcks
    *         replicas have caught up to this operation: set an error in response
    *   B.2 - Otherwise, set the response with no error.
+   *
+   *   检测是否满足DelayedProduce的执行条件，并在满足执行条件时调用forceComplete()方法完成该延迟任务
    */
   override def tryComplete(): Boolean = {
     // check for each partition if it still has pending acks
     produceMetadata.produceStatus.forKeyValue { (topicPartition, status) =>
       trace(s"Checking produce satisfaction for $topicPartition, current status $status")
       // skip those partitions that have already been satisfied
-      if (status.acksPending) {
+      if (status.acksPending) {// 检查此分区是否已经满足DelayedProduce执行条件
+        // 获取对应的Partition对象
         val (hasEnough, error) = replicaManager.getPartitionOrError(topicPartition) match {
           case Left(err) =>
             // Case A
+            // 找不到分区的Leader
             (false, err)
 
           case Right(partition) =>
+            // 检查此分区的HW位置是否大于 requiredOffset
             partition.checkEnoughReplicasReachOffset(status.requiredOffset)
         }
 
         // Case B.1 || B.2
-        if (error != Errors.NONE || hasEnough) {
+        if (error != Errors.NONE || hasEnough) {// 出现异常
           status.acksPending = false
           status.responseStatus.error = error
         }
@@ -104,6 +114,7 @@ class DelayedProduce(delayMs: Long,
     }
 
     // check if every partition has satisfied at least one of case A or B
+    // 检查全部的分区是否已经符合DelayedProduce的执行条件
     if (!produceMetadata.produceStatus.values.exists(_.acksPending))
       forceComplete()
     else
@@ -123,7 +134,9 @@ class DelayedProduce(delayMs: Long,
    * Upon completion, return the current response status along with the error code per partition
    */
   override def onComplete(): Unit = {
+    // 根据ProduceMetadata记录的相关信息，为每个Partition产生响应状态
     val responseStatus = produceMetadata.produceStatus.map { case (k, status) => k -> status.responseStatus }
+    // 调用回调函数
     responseCallback(responseStatus)
   }
 }

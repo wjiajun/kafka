@@ -430,6 +430,7 @@ class Log(@volatile var logStartOffset: Long,// 表示日志的当前最早位�
       // offset metadata is on a newer segment, which occurs whenever the log is rolled to a new segment.
       // 新高水位值要比老高水位值大以维持单调增加特性，否则就不做更新！
       // 另外，如果新高水位值在新日志段上，也可执行更新高水位操作
+      // 比较新旧HW值，决定是否执行HW
       if (oldHighWatermark.messageOffset < newHighWatermark.messageOffset ||
         (oldHighWatermark.messageOffset == newHighWatermark.messageOffset && oldHighWatermark.onOlderSegment(newHighWatermark))) {
         updateHighWatermarkMetadata(newHighWatermark)

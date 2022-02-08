@@ -133,6 +133,7 @@ class SystemTimer(executorName: String,
           // 推动时间轮向前"滚动"到Bucket的过期时间点
           timingWheel.advanceClock(bucket.getExpiration)
           // 将该Bucket下的所有定时任务重写回到时间轮
+          // 调用reinset,尝试将bucket中的任务重新添加到时间轮。此过程并不一定是将任务提交到taskExecutor，对于未到期的任务只是从原来的时间轮降级到下层时间轮继续等待
           bucket.flush(addTimerTaskEntry)
           // 读取下一个Bucket对象
           bucket = delayQueue.poll()
