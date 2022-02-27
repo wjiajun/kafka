@@ -772,6 +772,7 @@ class Partition(val topicPartition: TopicPartition,
    * ISR集合管理
    */
   private def maybeExpandIsr(followerReplica: Replica, followerFetchTimeMs: Long): Unit = {
+    // follower副本不在 isr集合中，ar 集合中可查到follower副本，follower副本的leo已经追上了HW
     val needsIsrUpdate = canAddReplicaToIsr(followerReplica.brokerId) && inReadLock(leaderIsrUpdateLock) {
       needsExpandIsr(followerReplica)
     }
@@ -885,7 +886,6 @@ class Partition(val topicPartition: TopicPartition,
   private def maybeIncrementLeaderHW(leaderLog: Log, curTime: Long = time.milliseconds): Boolean = {
     // maybeIncrementLeaderHW is in the hot path, the following code is written to
     // avoid unnecessary collection generation
-    // 获取ISR集合中所有副本的LEO
     // 将ISR集合中最小的LEO作为新的HW
     var newHighWatermark = leaderLog.logEndOffsetMetadata
     remoteReplicasMap.values.foreach { replica =>

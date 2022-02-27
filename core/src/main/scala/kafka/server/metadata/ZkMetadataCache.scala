@@ -90,17 +90,23 @@ class ZkMetadataCache(brokerId: Int) extends MetadataCache with Logging {
   // Otherwise, return LEADER_NOT_AVAILABLE for broker unavailable and missing listener (Metadata response v5 and below).
   private def getPartitionMetadata(snapshot: MetadataSnapshot, topic: String, listenerName: ListenerName, errorUnavailableEndpoints: Boolean,
                                    errorUnavailableListeners: Boolean): Option[Iterable[MetadataResponsePartition]] = {
+    // 获取每个topic的分区集合
     snapshot.partitionStates.get(topic).map { partitions =>
       partitions.map { case (partitionId, partitionState) =>
         val topicPartition = new TopicPartition(topic, partitionId.toInt)
         val leaderBrokerId = partitionState.leader
         val leaderEpoch = partitionState.leaderEpoch
+        // 获取leader所在的node
         val maybeLeader = getAliveEndpoint(snapshot, leaderBrokerId, listenerName)
 
+        // 获取分区的ar集合
         val replicas = partitionState.replicas
+        // 获取ar对应的可用副本
         val filteredReplicas = maybeFilterAliveReplicas(snapshot, replicas, listenerName, errorUnavailableEndpoints)
 
+        // 获取分区的isr集合
         val isr = partitionState.isr
+        // 过滤Isr集合中的可用副本
         val filteredIsr = maybeFilterAliveReplicas(snapshot, isr, listenerName, errorUnavailableEndpoints)
 
         val offlineReplicas = partitionState.offlineReplicas
@@ -126,10 +132,12 @@ class ZkMetadataCache(brokerId: Int) extends MetadataCache with Logging {
               .setOfflineReplicas(offlineReplicas)
 
           case Some(_) =>
+            // 检查AR副本是否都是可用的
             val error = if (filteredReplicas.size < replicas.size) {
               debug(s"Error while fetching metadata for $topicPartition: replica information not available for " +
                 s"following brokers ${replicas.asScala.filterNot(filteredReplicas.contains).mkString(",")}")
               Errors.REPLICA_NOT_AVAILABLE
+              // 检查ISR副本是否都是可用的
             } else if (filteredIsr.size < isr.size) {
               debug(s"Error while fetching metadata for $topicPartition: in sync replica information not available for " +
                 s"following brokers ${isr.asScala.filterNot(filteredIsr.contains).mkString(",")}")

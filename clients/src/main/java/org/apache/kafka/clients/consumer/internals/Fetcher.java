@@ -1398,6 +1398,12 @@ public class Fetcher<K, V> implements Closeable {
         return completedFetch;
     }
 
+    /**
+     * 处理Follower副本请求的offset超出了Leader副本的offset范围，可能是超过了Leader的LEO，也可能是小于Leader的最小offset（startOffset）
+     *
+     * @param fetchPosition
+     * @param topicPartition
+     */
     private void handleOffsetOutOfRange(FetchPosition fetchPosition, TopicPartition topicPartition) {
         String errorMessage = "Fetch position " + fetchPosition + " is out of range for partition " + topicPartition;
         if (subscriptions.hasDefaultOffsetResetPolicy()) {

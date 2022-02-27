@@ -122,6 +122,8 @@ abstract class AbstractFetcherManager[T <: AbstractFetcherThread](val name: Stri
   def addFetcherForPartitions(partitionAndOffsets: Map[TopicPartition, InitialFetchState]): Unit = {
     lock synchronized {
       val partitionsPerFetcher = partitionAndOffsets.groupBy { case (topicPartition, brokerAndInitialFetchOffset) =>
+        // 通过分区topic和分区编号计算fetch线程id，与broker网络信息组成key，进行分组。
+        // 每组对应相同的fetcher线程，每个fetcher线程只连接一个broker，但可以为多个分区的follower副本完成同步
         BrokerAndFetcherId(brokerAndInitialFetchOffset.leader, getFetcherId(topicPartition))
       }
 
@@ -135,6 +137,7 @@ abstract class AbstractFetcherManager[T <: AbstractFetcherThread](val name: Stri
 
       for ((brokerAndFetcherId, initialFetchOffsets) <- partitionsPerFetcher) {
         val brokerIdAndFetcherId = BrokerIdAndFetcherId(brokerAndFetcherId.broker.id, brokerAndFetcherId.fetcherId)
+        // 按照key查找对应的fetcher线程，查找不到就创建新的fetcher线程并启动
         val fetcherThread = fetcherThreadMap.get(brokerIdAndFetcherId) match {
           case Some(currentFetcherThread) if currentFetcherThread.sourceBroker == brokerAndFetcherId.broker =>
             // reuse the fetcher thread
@@ -146,6 +149,7 @@ abstract class AbstractFetcherManager[T <: AbstractFetcherThread](val name: Stri
             addAndStartFetcherThread(brokerAndFetcherId, brokerIdAndFetcherId)
         }
 
+        // 将分区信息以及同步起始位置传递给fetch线程，并唤醒fetch线程，开始同步
         addPartitionsToFetcherThread(fetcherThread, initialFetchOffsets)
       }
     }
@@ -166,8 +170,10 @@ abstract class AbstractFetcherManager[T <: AbstractFetcherThread](val name: Stri
   def removeFetcherForPartitions(partitions: Set[TopicPartition]): Map[TopicPartition, PartitionFetchState] = {
     val fetchStates = mutable.Map.empty[TopicPartition, PartitionFetchState]
     lock synchronized {
-      for (fetcher <- fetcherThreadMap.values)
+      for (fetcher <- fetcherThreadMap.values) {
         fetchStates ++= fetcher.removePartitions(partitions)
+      }
+      // 将topic信息移除
       failedPartitions.removeAll(partitions)
     }
     if (partitions.nonEmpty)

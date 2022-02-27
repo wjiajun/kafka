@@ -273,6 +273,7 @@ class KafkaApis(val requestChannel: RequestChannel, // 请求通道
       requestHelper.sendResponseExemptThrottle(request, leaderAndIsrRequest.getErrorResponse(0, Errors.STALE_BROKER_EPOCH.exception))
     } else {
       val response = replicaManager.becomeLeaderOrFollower(correlationId, leaderAndIsrRequest,
+        // onLeadershipChange 执行GroupCoordinator迁移操作，作为becomeLeaderOrFollower的回调方法传入，在角色变更完成后执行
         RequestHandlerHelper.onLeadershipChange(groupCoordinator, txnCoordinator, _, _))
       requestHelper.sendResponseExemptThrottle(request, response)
     }
@@ -592,7 +593,7 @@ class KafkaApis(val requestChannel: RequestChannel, // 请求通道
     def sendResponseCallback(responseStatus: Map[TopicPartition, PartitionResponse]): Unit = {
       // 生成响应状态集合，其中包括通过授权验证并处理完成的状态（responseStatus），以及未通过授权验证的状态
       val mergedResponseStatus = responseStatus ++ unauthorizedTopicResponses ++ nonExistingTopicResponses ++ invalidRequestResponses
-      var errorInResponse = false
+      var errorInResponse = false // 标识处理过程中是否出现了异常
 
       mergedResponseStatus.forKeyValue { (topicPartition, status) =>
         if (status.error != Errors.NONE) {

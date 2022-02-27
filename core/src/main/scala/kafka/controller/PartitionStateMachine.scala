@@ -38,9 +38,9 @@ abstract class PartitionStateMachine(controllerContext: ControllerContext) exten
    */
   def startup(): Unit = {
     info("Initializing partition state")
-    initializePartitionState()
+    initializePartitionState() // 初始化分区状态
     info("Triggering online partition state changes")
-    triggerOnlinePartitionStateChange()
+    triggerOnlinePartitionStateChange() // 尝试将分区切换到onlinePartition状态
     debug(s"Started partition state machine with initial state -> ${controllerContext.partitionStates}")
   }
 
@@ -72,6 +72,7 @@ abstract class PartitionStateMachine(controllerContext: ControllerContext) exten
       !controllerContext.isTopicQueuedUpForDeletion(partition.topic)
     }.toSeq
 
+    // 调用handleStateChanges方法对指定分区进行状态切换
     handleStateChanges(partitionsToTrigger, OnlinePartition, Some(OfflinePartitionLeaderElectionStrategy(false)))
     // TODO: If handleStateChanges catches an exception, it is not enough to bail out and log an error.
     // It is important to trigger leader election for those partitions.
@@ -85,14 +86,17 @@ abstract class PartitionStateMachine(controllerContext: ControllerContext) exten
     for (topicPartition <- controllerContext.allPartitions) {
       // check if leader and isr path exists for partition. If not, then it is in NEW state
       controllerContext.partitionLeadershipInfo(topicPartition) match {
-        case Some(currentLeaderIsrAndEpoch) =>
+        case Some(currentLeaderIsrAndEpoch) => // 存在Leader副本和ISR集合的信息
           // else, check if the leader for partition is alive. If yes, it is in Online state, else it is in Offline state
           if (controllerContext.isReplicaOnline(currentLeaderIsrAndEpoch.leaderAndIsr.leader, topicPartition))
-          // leader is alive
+          // leader is alive(leader所在broker可用)
             controllerContext.putPartitionState(topicPartition, OnlinePartition)
-          else
+          else {
+            // leader 所在broker 不可用
             controllerContext.putPartitionState(topicPartition, OfflinePartition)
+          }
         case None =>
+          // 没有 leader副本和isr集合的信息
           controllerContext.putPartitionState(topicPartition, NewPartition)
       }
     }
@@ -226,6 +230,7 @@ class ZkPartitionStateMachine(config: KafkaConfig,
     invalidPartitions.foreach(partition => logInvalidTransition(partition, targetState))
 
     // 根据targetState进入到不同的case分支
+    // 开始转换前会校验分区的前置状态是否合法
     targetState match {
       case NewPartition =>
         validPartitions.foreach { partition =>
@@ -311,11 +316,13 @@ class ZkPartitionStateMachine(config: KafkaConfig,
     // 为"有存活副本的分区"确定Leader和ISR
     // Leader确认依据：存活副本列表的首个副本被认定为Leader
     // ISR确认依据：存活副本列表被认定为ISR
+    // leaderEpoch 和 zkVersion初始化为0
     val leaderIsrAndControllerEpochs = partitionsWithLiveReplicas.map { case (partition, liveReplicas) =>
       val leaderAndIsr = LeaderAndIsr(liveReplicas.head, liveReplicas.toList)
       val leaderIsrAndControllerEpoch = LeaderIsrAndControllerEpoch(leaderAndIsr, controllerContext.epoch)
       partition -> leaderIsrAndControllerEpoch
     }.toMap
+    // 转成json保存至/brokers/topics/{topic_name}/partitions/[partitionId]/state
     val createResponses = try {
       zkClient.createTopicPartitionStatesRaw(leaderIsrAndControllerEpochs, controllerContext.epochZkVersion)
     } catch {
@@ -331,7 +338,9 @@ class ZkPartitionStateMachine(config: KafkaConfig,
       val partition = createResponse.ctx.get.asInstanceOf[TopicPartition]
       val leaderIsrAndControllerEpoch = leaderIsrAndControllerEpochs(partition)
       if (code == Code.OK) {
+        // 更新partitionLeaderInfo中的记录
         controllerContext.putPartitionLeadershipInfo(partition, leaderIsrAndControllerEpoch)
+        // 添加LeaderAndIsrRequest待发送
         controllerBrokerRequestBatch.addLeaderAndIsrRequestForBrokers(leaderIsrAndControllerEpoch.leaderAndIsr.isr,
           partition, leaderIsrAndControllerEpoch, controllerContext.partitionFullReplicaAssignment(partition), isNew = true)
         successfulInitializations += partition
@@ -480,7 +489,9 @@ class ZkPartitionStateMachine(config: KafkaConfig,
       result.foreach { leaderAndIsr =>
         val replicaAssignment = controllerContext.partitionFullReplicaAssignment(partition)
         val leaderIsrAndControllerEpoch = LeaderIsrAndControllerEpoch(leaderAndIsr, controllerContext.epoch)
+        // 更新partitionLeaderInfo中的记录
         controllerContext.putPartitionLeadershipInfo(partition, leaderIsrAndControllerEpoch)
+        // 添加LeaderAndISRRequest，待发送
         controllerBrokerRequestBatch.addLeaderAndIsrRequestForBrokers(recipientsPerPartition(partition), partition,
           leaderIsrAndControllerEpoch, replicaAssignment, isNew = false)
       }

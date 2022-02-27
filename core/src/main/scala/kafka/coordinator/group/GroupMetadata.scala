@@ -234,6 +234,7 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
   var currentStateTimestamp: Option[Long] = Some(time.milliseconds())
   var protocolType: Option[String] = None
   var protocolName: Option[String] = None
+  // 标识当前Consumer Group的年代信息，避免受到过期请求的影响
   var generationId = 0
   // 记录消费者组的Leader成员，可能不存在
   private var leaderId: Option[String] = None
@@ -512,6 +513,7 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
 
     // let each member vote for one of the protocols and choose the one with the most votes
     // 让每个成员投票，票数最多的那个策略当选
+    // 每个成员都会通过vote为其support protocols集合中第一个候选协议投一票，最终将选择投票最多的protocol
     val (protocol, _) = allMemberMetadata
       .map(_.vote(candidates))
       .groupBy(identity)

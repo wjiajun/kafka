@@ -87,6 +87,9 @@ class ZkIsrManager(scheduler: Scheduler, time: Time, zkClient: KafkaZkClient) ex
    * 2. There is no ISR Change in the last five seconds, or it has been more than 60 seconds since the last ISR propagation.
    * This allows an occasional ISR change to be propagated within a few seconds, and avoids overwhelming controller and
    * other brokers when large amount of ISR change occurs.
+   *
+   * KafkaController对相应路径添加了Wathcer，当Watcher被触发后会向其管理的Broker发送UpdateMetadataRequest，频繁地触发Watcher会影响KafkaController、ZooKeeper甚至其他Broker的性能。
+   * 为了避免这种情况，设置了一定的写入条件
    */
   private[server] def maybePropagateIsrChanges(): Unit = {
     val now = time.milliseconds()

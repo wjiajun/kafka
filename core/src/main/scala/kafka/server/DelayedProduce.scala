@@ -89,6 +89,7 @@ class DelayedProduce(delayMs: Long, // DelayedProduce的延迟时长
    */
   override def tryComplete(): Boolean = {
     // check for each partition if it still has pending acks
+    // 遍历produceMetadata中所有分区状态
     produceMetadata.produceStatus.forKeyValue { (topicPartition, status) =>
       trace(s"Checking produce satisfaction for $topicPartition, current status $status")
       // skip those partitions that have already been satisfied
@@ -107,6 +108,7 @@ class DelayedProduce(delayMs: Long, // DelayedProduce的延迟时长
 
         // Case B.1 || B.2
         if (error != Errors.NONE || hasEnough) {// 出现异常
+          // leader副本的HW位置大于 requiredOffset
           status.acksPending = false
           status.responseStatus.error = error
         }

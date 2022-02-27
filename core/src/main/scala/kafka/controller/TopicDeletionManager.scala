@@ -130,6 +130,7 @@ class TopicDeletionManager(config: KafkaConfig,// KafkaConfig类，保存Broker�
   def enqueueTopicsForDeletion(topics: Set[String]): Unit = {
     if (isDeleteTopicEnabled) {
       controllerContext.queueTopicDeletion(topics)
+      // 执行删除操作
       resumeDeletions()
     }
   }
@@ -309,6 +310,7 @@ class TopicDeletionManager(config: KafkaConfig,// KafkaConfig类，保存Broker�
    *    will delete all persistent data from all replicas of the respective partitions
    */
   private def onPartitionDeletion(topicsToBeDeleted: Set[String]): Unit = {
+    // 获取待删除的AR集合
     val allDeadReplicas = mutable.ListBuffer.empty[PartitionAndReplica]
     val allReplicasForDeletionRetry = mutable.ListBuffer.empty[PartitionAndReplica]
     val allTopicsIneligibleForDeletion = mutable.Set.empty[String]

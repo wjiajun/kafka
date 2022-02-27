@@ -59,9 +59,11 @@ abstract class ReplicaStateMachine(controllerContext: ControllerContext) extends
   private def initializeReplicaState(): Unit = {
     controllerContext.allPartitions.foreach { partition =>
       val replicas = controllerContext.partitionReplicaAssignment(partition)
+      // 遍历每个分区的AR集合
       replicas.foreach { replicaId =>
         val partitionAndReplica = PartitionAndReplica(partition, replicaId)
         if (controllerContext.isReplicaOnline(replicaId, partition)) {
+          // 将可用的副本初始化为OnlineReplica状态，不可用的副本初始化为ReplicaDeletionIneligible状态
           controllerContext.putReplicaState(partitionAndReplica, OnlineReplica)
         } else {
           // mark replicas on dead brokers as failed for topic deletion, if they belong to a topic to be deleted.

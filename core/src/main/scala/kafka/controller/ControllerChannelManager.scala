@@ -70,9 +70,11 @@ class ControllerChannelManager(controllerContext: ControllerContext,
    * 从元数据信息中找到集群中的broker list,依次调用add broker，把他们加入brokerstateinfo
    */
   def startup() = {
+    // 为Broker创建ControllerBrokerStateInfo对象
     controllerContext.liveOrShuttingDownBrokers.foreach(addNewBroker)
 
     brokerLock synchronized {
+      // 启动线程
       brokerStateInfo.foreach(brokerState => startRequestSendThread(brokerState._1))
     }
   }
@@ -98,6 +100,7 @@ class ControllerChannelManager(controllerContext: ControllerContext,
       val stateInfoOpt = brokerStateInfo.get(brokerId)
       stateInfoOpt match {
         case Some(stateInfo) =>
+          // 到队列缓存
           stateInfo.messageQueue.put(QueueItem(request.apiKey, request, callback, time.milliseconds()))
         case None =>
           warn(s"Not sending request $request to broker $brokerId, since it is offline.")
@@ -229,8 +232,8 @@ class ControllerChannelManager(controllerContext: ControllerContext,
       // hands off the NetworkClient from the RequestSendThread to the ZkEventThread.
       brokerState.reconfigurableChannelBuilder.foreach(config.removeReconfigurable)
       brokerState.requestSendThread.shutdown()
-      brokerState.networkClient.close()
-      brokerState.messageQueue.clear()
+      brokerState.networkClient.close() // 关闭底层连接
+      brokerState.messageQueue.clear() // 清空队列
       removeMetric(QueueSizeMetricName, brokerMetricTags(brokerState.brokerNode.id))
       removeMetric(RequestRateAndQueueTimeMetricName, brokerMetricTags(brokerState.brokerNode.id))
       brokerStateInfo.remove(brokerState.brokerNode.id)
@@ -287,12 +290,12 @@ class RequestSendThread(val controllerId: Int,// controller 所在的broker 的 
         try {
           if (!brokerReady()) {
             isSendSuccessful = false
-            backoff()// 等待重试
+            backoff()// 退避并重试
           }
           else {
             val clientRequest = networkClient.newClientRequest(brokerNode.idString, requestBuilder,
               time.milliseconds(), true)
-            // 发送请求，等待接收reponse
+            // 发送请求，等待接收response
             clientResponse = NetworkClientUtils.sendAndReceive(networkClient, clientRequest, time)
             isSendSuccessful = true
           }
@@ -382,8 +385,11 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
                                                     controllerContext: ControllerContext,
                                                     stateChangeLogger: StateChangeLogger) extends Logging {
   val controllerId: Int = config.brokerId
+  // 发往指定Broker的LeaderAndIsrRequest
   val leaderAndIsrRequestMap = mutable.Map.empty[Int, mutable.Map[TopicPartition, LeaderAndIsrPartitionState]]
+  // 发往指定Broker的StopReplicaRequest
   val stopReplicaRequestMap = mutable.Map.empty[Int, mutable.Map[TopicPartition, StopReplicaPartitionState]]
+  // 发往指定Broker的UpdateMetadataRequest
   val updateMetadataRequestBrokerSet = mutable.Set.empty[Int]
   val updateMetadataRequestPartitionInfoMap = mutable.Map.empty[TopicPartition, UpdateMetadataPartitionState]
 
@@ -469,8 +475,10 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
                                          partitions: collection.Set[TopicPartition]): Unit = {
 
     def updateMetadataRequestPartitionInfo(partition: TopicPartition, beingDeleted: Boolean): Unit = {
+      // 找出controller中保存该分区的leader
       controllerContext.partitionLeadershipInfo(partition) match {
         case Some(LeaderIsrAndControllerEpoch(leaderAndIsr, controllerEpoch)) =>
+          // 获取AR集合
           val replicas = controllerContext.partitionReplicaAssignment(partition)
           val offlineReplicas = replicas.filter(!controllerContext.isReplicaOnline(_, partition))
           val updatedLeaderAndIsr =

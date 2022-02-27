@@ -376,6 +376,7 @@ abstract class AbstractFetcherThread(name: String,// 线程名称
 
                     logAppendInfoOpt.foreach { logAppendInfo =>
                       val validBytes = logAppendInfo.validBytes
+                      // 获取返回最后一条消息的offset
                       val nextOffset = if (validBytes > 0) logAppendInfo.lastOffset + 1 else currentFetchState.fetchOffset
                       val lag = Math.max(0L, partitionData.highWatermark - nextOffset)
                       fetcherLagStats.getAndMaybePut(topicPartition).lag = lag
@@ -420,7 +421,7 @@ abstract class AbstractFetcherThread(name: String,// 线程名称
                         s"at offset ${currentFetchState.fetchOffset}", t)
                       markPartitionFailed(topicPartition)
                   }
-                // 如果读取位移值越界，通常是因为Leader发生变更
+                // 如果读取位移值越界，通常是因为Leader发生变更(Follower请求的offset超出了Leader的LEO)
                 case Errors.OFFSET_OUT_OF_RANGE =>
                   // 调整越界，主要办法是做截断
                   if (handleOutOfRangeError(topicPartition, currentFetchState, fetchPartitionData.currentLeaderEpoch))
@@ -523,12 +524,14 @@ abstract class AbstractFetcherThread(name: String,// 线程名称
     try {
       failedPartitions.removeAll(initialFetchStates.keySet)
 
+      // 检测分区是否已经存在
       initialFetchStates.forKeyValue { (tp, initialFetchState) =>
         val currentState = partitionStates.stateValue(tp)
         val updatedState = partitionFetchState(tp, initialFetchState, currentState)
         partitionStates.updateAndMoveToEnd(tp, updatedState)
       }
 
+      // 唤醒fetcher线程进行同步操作
       partitionMapCond.signalAll()
       initialFetchStates.keySet
     } finally partitionMapLock.unlock()
@@ -729,6 +732,7 @@ abstract class AbstractFetcherThread(name: String,// 线程名称
     try {
       for (partition <- partitions) {
         Option(partitionStates.stateValue(partition)).foreach { currentFetchState =>
+          // 检测分区同步状态，将分区对应的同步状态由激活改为延迟，延迟delay毫秒
           if (!currentFetchState.isDelayed) {
             partitionStates.updateAndMoveToEnd(partition, PartitionFetchState(currentFetchState.fetchOffset,
               currentFetchState.lag, currentFetchState.currentLeaderEpoch, Some(new DelayedItem(delay)),

@@ -598,6 +598,7 @@ class KafkaController(val config: KafkaConfig,
     replicaStateMachine.handleStateChanges(allReplicasOnNewBrokers.toSeq, OnlineReplica)
     // when a new broker comes up, the controller needs to trigger leader election for all new and offline partitions
     // to see if these brokers can become leaders for some/all of those
+    // 将NewPartition和OfflinePartition状态的分区转换成OnlinePartition状态
     partitionStateMachine.triggerOnlinePartitionStateChange()
     // check if reassignment of some partitions need to be restarted
     // 第5步：重启之前暂停的副本迁移操作
@@ -816,6 +817,7 @@ class KafkaController(val config: KafkaConfig,
       // A1. Send LeaderAndIsr request to every replica in ORS + TRS (with the new RS, AR and RR).
       updateLeaderEpochAndSendRequest(topicPartition, reassignment)
       // A2. replicas in AR -> NewReplica
+      // 将新AR - 旧AR中的副本更新成NewPartition状态
       startNewReplicasForReassignedPartition(topicPartition, addingReplicas)
     } else {
       // B1. replicas in AR -> OnlineReplica
@@ -830,6 +832,7 @@ class KafkaController(val config: KafkaConfig,
       // B5. replicas in RR -> NonExistentReplica (force those replicas to be deleted)
       stopRemovedReplicasOfReassignedPartition(topicPartition, removingReplicas)
       // B6. Update ZK with RS = TRS, AR = [], RR = [].
+      // 将Partition在ContextController和Zookeeper的AR集合更新成新AR + 旧AR
       updateReplicaAssignmentForPartition(topicPartition, completedReassignment)
       // B7. Remove the ISR reassign listener and maybe update the /admin/reassign_partitions path in ZK to remove this partition from it.
       removePartitionFromReassigningPartitions(topicPartition, completedReassignment)

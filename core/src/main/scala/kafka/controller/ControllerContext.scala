@@ -72,6 +72,7 @@ case class ReplicaAssignment private (replicas: Seq[Int],
     s"removingReplicas=${removingReplicas.mkString(",")})"
 }
 
+// ZooKeeper数据的缓存
 class ControllerContext {
   val stats = new ControllerStats // Controller统计信息类
   var offlinePartitionCount = 0 // 离线分区计数器，段统计集群中所有离线或处于不可用状态的主题分区数量
@@ -86,7 +87,9 @@ class ControllerContext {
   var topicIds = mutable.Map.empty[String, Uuid]
   var topicNames = mutable.Map.empty[Uuid, String]
   val partitionAssignments = mutable.Map.empty[String, mutable.Map[Int, ReplicaAssignment]] // 存所有主题分区的副本分配情况
+  // 记录了每个分区的Leader副本所在的BrokerId、ISR集合以及controller_epoch等信息
   private val partitionLeadershipInfo = mutable.Map.empty[TopicPartition, LeaderIsrAndControllerEpoch]
+  // 记录了正在重新分配副本的分区
   val partitionsBeingReassigned = mutable.Set.empty[TopicPartition]
   val partitionStates = mutable.Map.empty[TopicPartition, PartitionState]
   val replicaStates = mutable.Map.empty[PartitionAndReplica, ReplicaState]

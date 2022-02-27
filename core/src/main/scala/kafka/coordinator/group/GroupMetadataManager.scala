@@ -430,6 +430,7 @@ class GroupMetadataManager(brokerId: Int,
 
           // 构造位移主题的位移提交消息
           val records = filteredOffsetMetadata.map { case (topicPartition, offsetAndMetadata) =>
+            // (groupId、topic名称、partition_id三部分组成)
             val key = GroupMetadataManager.offsetCommitKey(group.groupId, topicPartition)
             val value = GroupMetadataManager.offsetCommitValue(offsetAndMetadata, interBrokerProtocolVersion)
             new SimpleRecord(timestamp, key, value)
@@ -616,6 +617,14 @@ class GroupMetadataManager(brokerId: Int,
     scheduler.schedule(topicPartition.toString, () => loadGroupsAndOffsets(topicPartition, coordinatorEpoch, onGroupLoaded, startTimeMs))
   }
 
+  /**
+   * 当Broker成为Offsets Topic分区的Leader副本时逻辑
+   *
+   * @param topicPartition
+   * @param coordinatorEpoch
+   * @param onGroupLoaded
+   * @param startTimeMs
+   */
   private[group] def loadGroupsAndOffsets(
     topicPartition: TopicPartition,
     coordinatorEpoch: Int,
@@ -641,6 +650,7 @@ class GroupMetadataManager(brokerId: Int,
       } catch {
         case t: Throwable => error(s"Error loading offsets from $topicPartition", t)
       } finally {
+        // 将当前offset topic分区从loadingParatitions移入ownedPartitions集合中
         inLock(partitionLock) {
           ownedPartitions.add(topicPartition.partition)
           loadingPartitions.remove(topicPartition.partition)
@@ -661,6 +671,7 @@ class GroupMetadataManager(brokerId: Int,
     //  Kafka 依靠它来判断分区的 Leader 副本是否发生变更。一旦发生变更，那么，在当前 Broker 执行 logEndOffset 方法的返回值，就是 -1，此时，Broker 就不再是 Leader 副本了。
     def logEndOffset: Long = replicaManager.getLogEndOffset(topicPartition).getOrElse(-1L)
 
+    // 获取partition对象对应的log实例
     replicaManager.getLog(topicPartition) match {
       // 如果无法获取到日志对象
       case None =>
@@ -761,7 +772,7 @@ class GroupMetadataManager(brokerId: Int,
 
                     // load offset
                     val groupTopicPartition = offsetKey.key
-                    // 如果该消息没有Value
+                    // 如果该消息没有Value(标记删除的消息)
                     if (!record.hasValue) {
                       if (isTxnOffsetCommit)
                         pendingOffsets(batch.producerId).remove(groupTopicPartition)
@@ -832,6 +843,7 @@ class GroupMetadataManager(brokerId: Int,
           .partition { case (group, _) => loadedGroups.contains(group)}
 
         // 处理loadedGroups
+        // 将需要加载的GroupMetadata信息加载到groupCache集合中
         loadedGroups.values.foreach { group =>
           // 提取消费者组的已提交位移
           val offsets = groupOffsets.getOrElse(group.groupId, Map.empty[TopicPartition, CommitRecordMetadataAndOffset])
@@ -857,6 +869,7 @@ class GroupMetadataManager(brokerId: Int,
         }
 
         // 处理removedGroups
+        // 检测需要删除的GroupMetadata信息是否还在groupsCache集合中
         removedGroups.foreach { groupId =>
           // if the cache already contains a group which should be removed, raise an error. Note that it
           // is possible (however unlikely) for a consumer group to be removed, and then to be used only for
