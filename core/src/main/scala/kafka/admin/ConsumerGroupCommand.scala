@@ -67,11 +67,11 @@ object ConsumerGroupCommand extends Logging {
     val consumerGroupService = new ConsumerGroupService(opts)
     try {
       if (opts.options.has(opts.listOpt))
-        consumerGroupService.listGroups()
+        consumerGroupService.listGroups()// 输出全部consumer group 的id
       else if (opts.options.has(opts.describeOpt))
-        consumerGroupService.describeGroups()
+        consumerGroupService.describeGroups() // 输出指定consumer group 的描述信息
       else if (opts.options.has(opts.deleteOpt))
-        consumerGroupService.deleteGroups()
+        consumerGroupService.deleteGroups() // 删除指定consumer group
       else if (opts.options.has(opts.resetOffsetsOpt)) {
         val offsetsToReset = consumerGroupService.resetOffsets()
         if (opts.options.has(opts.exportOpt)) {

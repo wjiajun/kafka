@@ -32,5 +32,6 @@ private[group] class DelayedHeartbeat(coordinator: GroupCoordinator,
 
   override def tryComplete(): Boolean = coordinator.tryCompleteHeartbeat(group, memberId, isPending, forceComplete _)
   override def onExpiration(): Unit = coordinator.onExpireHeartbeat(group, memberId, isPending)
+  // DelayedHeartbeat执行之后仅会将其从heartbeatPurgatory中删除，并不会进行其他操作
   override def onComplete(): Unit = {}
 }

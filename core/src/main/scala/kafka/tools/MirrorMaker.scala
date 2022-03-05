@@ -67,7 +67,7 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
   private var mirrorMakerThreads: Seq[MirrorMakerThread] = null
   private val isShuttingDown: AtomicBoolean = new AtomicBoolean(false)
   // Track the messages not successfully sent by mirror maker.
-  private val numDroppedMessages: AtomicInteger = new AtomicInteger(0)
+  private val numDroppedMessages: AtomicInteger = new AtomicInteger(0)// AtomicInteger对象，记录MirrorMaker发送失败的消息个数
   private var messageHandler: MirrorMakerMessageHandler = null
   private var offsetCommitIntervalMs = 0
   private var abortOnSendFailure: Boolean = true
@@ -94,7 +94,9 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
         error("Exception when starting mirror maker.", t)
     }
 
+    // 启动mirrorMakerThreads线程
     mirrorMakerThreads.foreach(_.start())
+    // 主线程阻塞等待mirrorMakerThreads结束
     mirrorMakerThreads.foreach(_.awaitShutdown())
   }
 
@@ -109,11 +111,13 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
     consumerConfigProps.setProperty("value.deserializer", classOf[ByteArrayDeserializer].getName)
     // The default client id is group id, we manually set client id to groupId-index to avoid metric collision
     val groupIdString = consumerConfigProps.getProperty("group.id")
+    // 创建指定数量的KafkaConsumer对象
     val consumers = (0 until numStreams) map { i =>
       consumerConfigProps.setProperty("client.id", groupIdString + "-" + i.toString)
       new KafkaConsumer[Array[Byte], Array[Byte]](consumerConfigProps)
     }
     include.getOrElse(throw new IllegalArgumentException("include list cannot be empty"))
+    // 创建MirrorMakerNewConsumer
     consumers.map(consumer => new ConsumerWrapper(consumer, customRebalanceListener, include))
   }
 
@@ -207,21 +211,24 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
     override def run(): Unit = {
       info(s"Starting mirror maker thread $threadName")
       try {
+        // 初始化consumer
         consumerWrapper.init()
 
         // We needed two while loops due to the old consumer semantics, this can now be simplified
+        // 检测exitingOnSendFailure、shuttingDown等标记
         while (!exitingOnSendFailure && !shuttingDown) {
           try {
             while (!exitingOnSendFailure && !shuttingDown) {
-              val data = consumerWrapper.receive()
+              val data = consumerWrapper.receive()// 从源集群获取消息
               if (data.value != null) {
                 trace("Sending message with value size %d and offset %d.".format(data.value.length, data.offset))
               } else {
                 trace("Sending message with null value and offset %d.".format(data.offset))
               }
+              // 通过handler创建ProducerRecord
               val records = messageHandler.handle(toBaseConsumerRecord(data))
-              records.forEach(producer.send)
-              maybeFlushAndCommitOffsets()
+              records.forEach(producer.send)// 发送消息
+              maybeFlushAndCommitOffsets()// 尝试提交offset
             }
           } catch {
             case _: NoRecordsException =>
@@ -261,11 +268,12 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
     }
 
     def maybeFlushAndCommitOffsets(): Unit = {
+      // 满足offsetCommitIntervalMs指定间隔才提交一次offset
       if (System.currentTimeMillis() - lastOffsetCommitMs > offsetCommitIntervalMs) {
         debug("Committing MirrorMaker state.")
-        producer.flush()
-        commitOffsets(consumerWrapper)
-        lastOffsetCommitMs = System.currentTimeMillis()
+        producer.flush()// 将MirrorMakerProducer缓冲的消息发送出去
+        commitOffsets(consumerWrapper)// 提交consumerWrapper集合中记录的offsets
+        lastOffsetCommitMs = System.currentTimeMillis()// 更新最近一次提交的时间戳
       }
     }
 
@@ -372,9 +380,10 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
     val producer = new KafkaProducer[Array[Byte], Array[Byte]](producerProps)
 
     def send(record: ProducerRecord[Array[Byte], Array[Byte]]): Unit = {
-      if (sync) {
+      if (sync) { // 同步发送
         this.producer.send(record).get()
       } else {
+        // 异步发送
           this.producer.send(record,
             new MirrorMakerProducerCallback(record.topic(), record.key(), record.value()))
       }
@@ -400,14 +409,17 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
       if (exception != null) {
         // Use default call back to log error. This means the max retries of producer has reached and message
         // still could not be sent.
+        // 通过父类实现输出错误日志
         super.onCompletion(metadata, exception)
         // If abort.on.send.failure is set, stop the mirror maker. Otherwise log skipped message and move on.
+        // 如果设置了abort.on.send.failure参数，则停止MirrorMaker，否则忽略异常，继续发送后面的消息
         if (abortOnSendFailure) {
           info("Closing producer due to send failure.")
+          // 设置为true后会通知全部MirrorMakerThread停止
           exitingOnSendFailure = true
           producer.close(0)
         }
-        numDroppedMessages.incrementAndGet()
+        numDroppedMessages.incrementAndGet()// 记录发送失败的消息数量
       }
     }
   }
@@ -526,6 +538,7 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
       offsetCommitIntervalMs = options.valueOf(offsetCommitIntervalMsOpt).intValue()
       val numStreams = options.valueOf(numStreamsOpt).intValue()
 
+      // 添加JVM关闭钩子
       Exit.addShutdownHook("MirrorMakerShutdownHook", cleanShutdown())
 
       // create producer
@@ -540,6 +553,7 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
       // Always set producer key and value serializer to ByteArraySerializer.
       producerProps.setProperty(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, classOf[ByteArraySerializer].getName)
       producerProps.setProperty(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, classOf[ByteArraySerializer].getName)
+      // 创建MirrorMakerProducer
       producer = new MirrorMakerProducer(sync, producerProps)
 
       // Create consumers
@@ -561,6 +575,7 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
       else
         Option(options.valueOf(whitelistOpt))
 
+      // 创建消费者
       val mirrorMakerConsumers = createConsumers(
         numStreams,
         consumerProps,
@@ -568,6 +583,7 @@ object MirrorMaker extends Logging with KafkaMetricsGroup {
         includedTopicsValue)
 
       // Create mirror maker threads.
+      // 创建mirrorMakerThread线程与消费者一一对应
       mirrorMakerThreads = (0 until numStreams) map (i =>
         new MirrorMakerThread(mirrorMakerConsumers(i), i))
 

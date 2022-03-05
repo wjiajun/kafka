@@ -44,22 +44,24 @@ import scala.concurrent.ExecutionException
 object TopicCommand extends Logging {
 
   def main(args: Array[String]): Unit = {
+    // 使用joptsimple命令行解释器解释传入的参数，支持list、describe、create、alter、delete5种操作
     val opts = new TopicCommandOptions(args)
     opts.checkArgs()
 
     val topicService = TopicService(opts.commandConfig, opts.bootstrapServer)
 
+    // 根据输入的参数执行不同的操作
     var exitCode = 0
     try {
-      if (opts.hasCreateOption)
+      if (opts.hasCreateOption) // create参数，创建topic
         topicService.createTopic(opts)
-      else if (opts.hasAlterOption)
+      else if (opts.hasAlterOption)// alter参数，修改topic
         topicService.alterTopic(opts)
-      else if (opts.hasListOption)
+      else if (opts.hasListOption)// list参数，查询topic
         topicService.listTopics(opts)
-      else if (opts.hasDescribeOption)
+      else if (opts.hasDescribeOption)//describe参数，查询topic详细参数
         topicService.describeTopic(opts)
-      else if (opts.hasDeleteOption)
+      else if (opts.hasDeleteOption)// delete参数，删除topic
         topicService.deleteTopic(opts)
     } catch {
       case e: ExecutionException =>
@@ -212,7 +214,8 @@ object TopicCommand extends Logging {
   case class TopicService private (adminClient: Admin) extends AutoCloseable {
 
     def createTopic(opts: TopicCommandOptions): Unit = {
-      val topic = new CommandTopicPartition(opts)
+      val topic = new CommandTopicPartition(opts)// 获取topic参数
+      // 检测topic名称是否包含"."或"_"字符，若包含则输出告警信息
       if (Topic.hasCollisionChars(topic.name))
         println("WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could " +
           "collide. To avoid issues it is best to use either, but not both.")
@@ -226,9 +229,14 @@ object TopicCommand extends Logging {
         throw new IllegalArgumentException(s"The partitions must be greater than 0")
 
       try {
-        val newTopic = if (topic.hasReplicaAssignment)
+        val newTopic = if (topic.hasReplicaAssignment) {
+          // 检测是否有replica-assignment参数
+          // replica-assignment参数的格式类似：0:1:2、3:4:5、6:7:8，其中指定了编号为0的分区
+          // 有三个副本且分配在broker0-2上，编号为1的分区由三个副本且分配在broker3-5上。
+          // 将replica-assignment参数内容解析成replicasAssignments: Map[Integer, List[Integer]]格式
           new NewTopic(topic.name, asJavaReplicaReassignment(topic.replicaAssignment.get))
-        else {
+        } else {
+          // 进行副本自动分配需指定partitions参数和replication-factor参数
           new NewTopic(
             topic.name,
             topic.partitions.asJava,
@@ -241,6 +249,7 @@ object TopicCommand extends Logging {
           .toMap.asJava
 
         newTopic.configs(configsMap)
+        // 将topic名称和分配结果写入zk
         val createResult = adminClient.createTopics(Collections.singleton(newTopic),
           new CreateTopicsOptions().retryOnQuotaViolation(false))
         createResult.all().get()
@@ -260,6 +269,7 @@ object TopicCommand extends Logging {
 
     def alterTopic(opts: TopicCommandOptions): Unit = {
       val topic = new CommandTopicPartition(opts)
+      // 从zk中获取与topic正则参数的topic集合
       val topics = getTopics(opts.topic, opts.excludeInternalTopics)
       ensureTopicExists(topics, opts.topic, !opts.ifExists)
 
@@ -269,6 +279,7 @@ object TopicCommand extends Logging {
           if (topic.hasReplicaAssignment) {
             val startPartitionId = topicsInfo.get(topicName).get().partitions().size()
             val newAssignment = {
+              // 获取"replica-assignment"参数的值
               val replicaMap = topic.replicaAssignment.get.drop(startPartitionId)
               new util.ArrayList(replicaMap.map(p => p._2.asJava).asJavaCollection).asInstanceOf[util.List[util.List[Integer]]]
             }
@@ -277,6 +288,7 @@ object TopicCommand extends Logging {
             topicName -> NewPartitions.increaseTo(topic.partitions.get)
           }
         }.toMap
+        // 调用adminClient.createPartitions方法完成分区数量的增加以及副本分配
         adminClient.createPartitions(newPartitions.asJava,
           new CreatePartitionsOptions().retryOnQuotaViolation(false)).all().get()
       }
@@ -422,6 +434,7 @@ object TopicCommand extends Logging {
   }
 
   def asJavaReplicaReassignment(original: Map[Int, List[Int]]): util.Map[Integer, util.List[Integer]] = {
+    // key 分区编号 value副本所分配的broker id
     original.map(f => Integer.valueOf(f._1) -> f._2.map(e => Integer.valueOf(e)).asJava).asJava
   }
 
@@ -509,6 +522,7 @@ object TopicCommand extends Logging {
     private val ifNotExistsOpt = parser.accepts("if-not-exists",
       "if set when creating topics, the action will only execute if the topic does not already exist.")
 
+    // 决定副本分配时是否考虑机架信息
     private val disableRackAware = parser.accepts("disable-rack-aware", "Disable rack aware replica assignment")
 
     private val excludeInternalTopicOpt = parser.accepts("exclude-internal",

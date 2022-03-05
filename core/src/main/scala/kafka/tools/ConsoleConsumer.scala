@@ -70,8 +70,10 @@ object ConsoleConsumer extends Logging {
       else
         new ConsumerWrapper(Option(conf.topicArg), None, None, Option(conf.includedTopicsArg), consumer, timeoutMs)
 
+    // 添加JVM关闭钩子
     addShutdownHook(consumerWrapper, conf)
 
+    // 从服务端获取消息并输出
     try process(conf.maxMessages, conf.formatter, consumerWrapper, System.out, conf.skipMessageOnError)
     finally {
       consumerWrapper.cleanup()

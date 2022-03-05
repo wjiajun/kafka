@@ -134,6 +134,7 @@ object BrokerApiVersionsCommand {
                      request: AbstractRequest.Builder[_ <: AbstractRequest]): AbstractResponse = {
       val future = client.send(target, request)
       pendingFutures.add(future)
+      // 阻塞等待响应
       future.awaitDone(Long.MaxValue, TimeUnit.MILLISECONDS)
       pendingFutures.remove(future)
       if (future.succeeded())
@@ -176,6 +177,7 @@ object BrokerApiVersionsCommand {
 
     private def findAllBrokers(): List[Node] = {
       val request = MetadataRequest.Builder.allTopics()
+      // 发送请求
       val response = sendAnyNode(request).asInstanceOf[MetadataResponse]
       val errors = response.errors
       if (!errors.isEmpty)

@@ -213,8 +213,10 @@ public class SaslChannelBuilder implements ChannelBuilder, ListenerReconfigurabl
         try {
             SocketChannel socketChannel = (SocketChannel) key.channel();
             Socket socket = socketChannel.socket();
+            // 底层连接，其中封装了SocketChannel和SelectionKey
             TransportLayer transportLayer = buildTransportLayer(id, key, socketChannel, metadataRegistry);
             Supplier<Authenticator> authenticatorCreator;
+            // 创建SaslServerAuthenticator，完成认证操作的关键
             if (mode == Mode.SERVER) {
                 authenticatorCreator = () -> buildServerAuthenticator(configs,
                         Collections.unmodifiableMap(saslCallbackHandlers),

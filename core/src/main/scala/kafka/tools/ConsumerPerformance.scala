@@ -43,16 +43,17 @@ object ConsumerPerformance extends LazyLogging {
 
     val config = new ConsumerPerfConfig(args)
     logger.info("Starting consumer...")
-    val totalMessagesRead = new AtomicLong(0)
-    val totalBytesRead = new AtomicLong(0)
+    val totalMessagesRead = new AtomicLong(0) // 从服务端拉取的消息数
+    val totalBytesRead = new AtomicLong(0)// 获取消息的总字节数
     var metrics: mutable.Map[MetricName, _ <: Metric] = null
     val joinGroupTimeInMs = new AtomicLong(0)
 
     if (!config.hideHeader)
       printHeader(config.showDetailedStats)
 
-    var startMs, endMs = 0L
+    var startMs, endMs = 0L// 记录测试过程的开始时间戳和结束时间戳
     val consumer = new KafkaConsumer[Array[Byte], Array[Byte]](config.props)
+    // 根据配置决定是否输出抬头信息
     startMs = System.currentTimeMillis
     consume(consumer, List(config.topic), config.numMessages, config.recordFetchTimeoutMs, config, totalMessagesRead, totalBytesRead, joinGroupTimeInMs, startMs)
     endMs = System.currentTimeMillis
@@ -64,6 +65,7 @@ object ConsumerPerformance extends LazyLogging {
     val elapsedSecs = (endMs - startMs) / 1000.0
     val fetchTimeInMs = (endMs - startMs) - joinGroupTimeInMs.get
     if (!config.showDetailedStats) {
+      // 输出测试过程中的开始时间、结束时间、消息的总字节数（单位mb）、每秒拉取的字节数、每秒消息的消息条数以及消费的总消息数
       val totalMBRead = (totalBytesRead.get * 1.0) / (1024 * 1024)
       println("%s, %s, %.4f, %.4f, %d, %.4f, %d, %d, %.4f, %.4f".format(
         config.dateFormat.format(startMs),
@@ -102,13 +104,14 @@ object ConsumerPerformance extends LazyLogging {
               totalBytesRead: AtomicLong,
               joinTime: AtomicLong,
               testStartTime: Long): Unit = {
-    var bytesRead = 0L
-    var messagesRead = 0L
+    var bytesRead = 0L // 记录读取到的总字节数
+    var messagesRead = 0L// 记录拉取的消息个数
     var lastBytesRead = 0L
     var lastMessagesRead = 0L
     var joinStart = System.currentTimeMillis
     var joinTimeMsInSingleRound = 0L
 
+    // 订阅topic，同时添加ConsumerRebalanceListener用来修改join相关参数
     consumer.subscribe(topics.asJava, new ConsumerRebalanceListener {
       def onPartitionsAssigned(partitions: util.Collection[TopicPartition]): Unit = {
         joinTime.addAndGet(System.currentTimeMillis - joinStart)
@@ -121,7 +124,7 @@ object ConsumerPerformance extends LazyLogging {
     // Now start the benchmark
     var currentTimeMillis = System.currentTimeMillis
     var lastReportTime: Long = currentTimeMillis
-    var lastConsumedTime = currentTimeMillis
+    var lastConsumedTime = currentTimeMillis // 记录最后一次拉取的时间
 
     while (messagesRead < count && currentTimeMillis - lastConsumedTime <= timeout) {
       val records = consumer.poll(Duration.ofMillis(100)).asScala
@@ -129,19 +132,20 @@ object ConsumerPerformance extends LazyLogging {
       if (records.nonEmpty)
         lastConsumedTime = currentTimeMillis
       for (record <- records) {
-        messagesRead += 1
+        messagesRead += 1 // 增加消息消费数量
         if (record.key != null)
-          bytesRead += record.key.size
+          bytesRead += record.key.size // 增加总字节数
         if (record.value != null)
-          bytesRead += record.value.size
+          bytesRead += record.value.size // 增加消费总字节数
 
+        // 间隔reportingInterval输出一次统计数据
         if (currentTimeMillis - lastReportTime >= config.reportingInterval) {
           if (config.showDetailedStats)
             printConsumerProgress(0, bytesRead, lastBytesRead, messagesRead, lastMessagesRead,
               lastReportTime, currentTimeMillis, config.dateFormat, joinTimeMsInSingleRound)
           joinTimeMsInSingleRound = 0L
-          lastReportTime = currentTimeMillis
-          lastMessagesRead = messagesRead
+          lastReportTime = currentTimeMillis // 记录输出时间
+          lastMessagesRead = messagesRead // 更新，供下次输出使用
           lastBytesRead = bytesRead
         }
       }

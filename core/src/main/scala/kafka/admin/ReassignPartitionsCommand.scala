@@ -225,16 +225,16 @@ object ReassignPartitionsCommand extends Logging {
 
   private def handleAction(adminClient: Admin,
                            opts: ReassignPartitionsCommandOptions): Unit = {
-    if (opts.options.has(opts.verifyOpt)) {
+    if (opts.options.has(opts.verifyOpt)) {// 检测迁移副本是否已经结束
       verifyAssignment(adminClient,
         Utils.readFileAsString(opts.options.valueOf(opts.reassignmentJsonFileOpt)),
         opts.options.has(opts.preserveThrottlesOpt))
-    } else if (opts.options.has(opts.generateOpt)) {
+    } else if (opts.options.has(opts.generateOpt)) {// 输出迁移方案和副本分片情况
       generateAssignment(adminClient,
         Utils.readFileAsString(opts.options.valueOf(opts.topicsToMoveJsonFileOpt)),
         opts.options.valueOf(opts.brokerListOpt),
         !opts.options.has(opts.disableRackAware))
-    } else if (opts.options.has(opts.executeOpt)) {
+    } else if (opts.options.has(opts.executeOpt)) {// 执行指定的副本迁移
       executeAssignment(adminClient,
         opts.options.has(opts.additionalOpt),
         Utils.readFileAsString(opts.options.valueOf(opts.reassignmentJsonFileOpt)),
@@ -573,16 +573,22 @@ object ReassignPartitionsCommand extends Logging {
    *
    * @return                      A tuple containing the proposed assignment and the
    *                              current assignment.
+   *
+   *  负责输出副本迁移方案以及当前分区的AR信息
    */
   def generateAssignment(adminClient: Admin,
                          reassignmentJson: String,
                          brokerListString: String,
                          enableRackAwareness: Boolean)
                          : (Map[TopicPartition, Seq[Int]], Map[TopicPartition, Seq[Int]]) = {
-    val (brokersToReassign, topicsToReassign) =
+    val (brokersToReassign, topicsToReassign) = {
       parseGenerateAssignmentArgs(reassignmentJson, brokerListString)
+    }
+    // 获取当前待迁移topic的当前副本分配情况
     val currentAssignments = getReplicaAssignmentForTopics(adminClient, topicsToReassign)
+    // 获取broker-list参数指定的broker信息（其中包括机架信息）
     val brokerMetadatas = getBrokerMetadata(adminClient, brokersToReassign, enableRackAwareness)
+    // 记录副本迁移的目标
     val proposedAssignments = calculateAssignment(currentAssignments, brokerMetadatas)
     println("Current partition replica assignment\n%s\n".
       format(formatAsReassignmentJson(currentAssignments, Map.empty)))
@@ -607,11 +613,14 @@ object ReassignPartitionsCommand extends Logging {
     groupedByTopic.forKeyValue { (topic, assignment) =>
       val (_, replicas) = assignment.head
       val assignedReplicas = AdminUtils.
+        // 进行副本自动分配,brokerMetadatas中只有broker-list参数指定的broker信息
         assignReplicasToBrokers(brokerMetadatas, assignment.size, replicas.size)
+      // 记录此topic副本迁移后的分配结果
       proposedAssignments ++= assignedReplicas.map { case (partition, replicas) =>
         new TopicPartition(topic, partition) -> replicas
       }
     }
+    // 生成的副本目标和当前副本分配情况
     proposedAssignments
   }
 
@@ -716,9 +725,11 @@ object ReassignPartitionsCommand extends Logging {
                                   brokerList: String): (Seq[Int], Seq[String]) = {
     val brokerListToReassign = brokerList.split(',').map(_.toInt)
     val duplicateReassignments = CoreUtils.duplicates(brokerListToReassign)
+    // 检测待迁移的topic集合中是否存在重复的topic，若存在则抛出异常
     if (duplicateReassignments.nonEmpty)
       throw new AdminCommandFailedException("Broker list contains duplicate entries: %s".
         format(duplicateReassignments.mkString(",")))
+    // 获取待迁移的topic集合
     val topicsToReassign = parseTopicsData(reassignmentJson)
     val duplicateTopicsToReassign = CoreUtils.duplicates(topicsToReassign)
     if (duplicateTopicsToReassign.nonEmpty)
@@ -748,6 +759,7 @@ object ReassignPartitionsCommand extends Logging {
                         logDirThrottle: Long = -1L,
                         timeoutMs: Long = 10000L,
                         time: Time = Time.SYSTEM): Unit = {
+    // 解析reassignmentJson文件参数指定的输入内容，得到待迁移的topic和分区信息
     val (proposedParts, proposedReplicas) = parseExecuteAssignmentArgs(reassignmentJson)
     val currentReassignments = adminClient.
       listPartitionReassignments().reassignments().get().asScala
@@ -757,6 +769,7 @@ object ReassignPartitionsCommand extends Logging {
       throw new TerseReassignmentFailureException(cannotExecuteBecauseOfExistingMessage)
     }
     verifyBrokerIds(adminClient, proposedParts.values.flatten.toSet)
+    // 获取当前分区的分配情况
     val currentParts = getReplicaAssignmentForPartitions(adminClient, proposedParts.keySet.toSet)
     println(currentPartitionReplicaAssignmentToString(proposedParts, currentParts))
 
@@ -1166,9 +1179,11 @@ object ReassignPartitionsCommand extends Logging {
     if (partitionsToBeReassigned.exists(_._2.isEmpty)) {
       throw new AdminCommandFailedException("Partition replica list cannot be empty")
     }
+    // 检车待迁移的topic是否存在重复
     val duplicateReassignedPartitions = CoreUtils.duplicates(partitionsToBeReassigned.map { case (tp, _) => tp })
     if (duplicateReassignedPartitions.nonEmpty)
       throw new AdminCommandFailedException("Partition reassignment contains duplicate topic partitions: %s".format(duplicateReassignedPartitions.mkString(",")))
+    // 检测待迁移的分区副本是否存在重复
     val duplicateEntries = partitionsToBeReassigned
       .map { case (tp, replicas) => (tp, CoreUtils.duplicates(replicas))}
       .filter { case (_, duplicatedReplicas) => duplicatedReplicas.nonEmpty }

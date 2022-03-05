@@ -46,11 +46,15 @@ object DumpLogSegments {
     CommandLineUtils.printHelpAndExitIfNeeded(opts, "This tool helps to parse a log file and dump its contents to the console, useful for debugging a seemingly corrupt log segment.")
     opts.checkArgs()
 
+    // key: 索引文件的绝对路径
+    // value: 索引项中的相对offset和消息的offset组成的元祖的集合
     val misMatchesForIndexFilesMap = mutable.Map[String, List[(Long, Long)]]()
     val timeIndexDumpErrors = new TimeIndexDumpErrors
+    // 如果消息是未压缩的，则需要offset是连续的，若不连续，则记录到nonConsecutivePairsForLogFilesMap集合中，key为日志文件的绝对路径，value是出现不连续消息的前后两个offset组成的元组集合
     val nonConsecutivePairsForLogFilesMap = mutable.Map[String, List[(Long, Long)]]()
 
     for (arg <- opts.files) {
+      // 处理命令参数指定的文件集合
       val file = new File(arg)
       println(s"Dumping $file")
 
@@ -58,9 +62,11 @@ object DumpLogSegments {
       val suffix = filename.substring(filename.lastIndexOf("."))
       suffix match {
         case Log.LogFileSuffix =>
+          // 打印日志文件
           dumpLog(file, opts.shouldPrintDataLog, nonConsecutivePairsForLogFilesMap, opts.isDeepIteration,
             opts.maxMessageSize, opts.messageParser, opts.skipRecordMetadata)
         case Log.IndexFileSuffix =>
+          // 打印索引文件
           dumpIndex(file, opts.indexSanityOnly, opts.verifyOnly, misMatchesForIndexFilesMap, opts.maxMessageSize)
         case Log.TimeIndexFileSuffix =>
           dumpTimeIndex(file, opts.indexSanityOnly, opts.verifyOnly, timeIndexDumpErrors, opts.maxMessageSize)
@@ -122,9 +128,12 @@ object DumpLogSegments {
                                verifyOnly: Boolean,
                                misMatchesForIndexFilesMap: mutable.Map[String, List[(Long, Long)]],
                                maxMessageSize: Int): Unit = {
+    // 获取baseOffset
     val startOffset = file.getName.split("\\.")(0).toLong
+    // 获取对应的日志文件
     val logFile = new File(file.getAbsoluteFile.getParent, file.getName.split("\\.")(0) + Log.LogFileSuffix)
     val fileRecords = FileRecords.open(logFile, false)
+    // 创建OffsetIndex
     val index = new OffsetIndex(file, baseOffset = startOffset, writable = false)
 
     if (index.entries == 0) {
@@ -133,6 +142,7 @@ object DumpLogSegments {
     }
 
     //Check that index passes sanityCheck, this is the check that determines if indexes will be rebuilt on startup or not.
+    // 对索引文件做简单检查，例如：最后一个索引项的offset大于baseOffset,索引文件大小是8的倍数
     if (indexSanityOnly) {
       index.sanityCheck()
       println(s"$file passed sanity check.")
@@ -140,20 +150,24 @@ object DumpLogSegments {
     }
 
     for (i <- 0 until index.entries) {
+      // 读取索引项
       val entry = index.entry(i)
 
       // since it is a sparse file, in the event of a crash there may be many zero entries, stop if we see one
       if (entry.offset == index.baseOffset && i > 0)
         return
 
+      // 获取一个分片，分片的起始位置是索引项指定的位置
       val slice = fileRecords.slice(entry.position, maxMessageSize)
+      // 从分片中获取第一条消息
       val firstBatchLastOffset = slice.batches.iterator.next().lastOffset
       if (firstBatchLastOffset != entry.offset) {
+        // 如果消息的offset与索引项的offset不匹配，则需要记录下来
         var misMatchesSeq = misMatchesForIndexFilesMap.getOrElse(file.getAbsolutePath, List[(Long, Long)]())
         misMatchesSeq ::= (entry.offset, firstBatchLastOffset)
         misMatchesForIndexFilesMap.put(file.getAbsolutePath, misMatchesSeq)
       }
-      if (!verifyOnly)
+      if (!verifyOnly) // 输出索引的内容
         println(s"offset: ${entry.offset} position: ${entry.position}")
     }
   }
@@ -250,18 +264,19 @@ object DumpLogSegments {
                       skipRecordMetadata: Boolean): Unit = {
     val startOffset = file.getName.split("\\.")(0).toLong
     println("Starting offset: " + startOffset)
-    val fileRecords = FileRecords.open(file, false)
+    val fileRecords = FileRecords.open(file, false) // 创建FileRecords对象
     try {
-      var validBytes = 0L
-      var lastOffset = -1L
+      var validBytes = 0L // 已经通过验证的字节数
+      var lastOffset = -1L // 记录Offset
 
       for (batch <- fileRecords.batches.asScala) {
         printBatchLevel(batch, validBytes)
         if (isDeepIteration) {
-          for (record <- batch.asScala) {
-            if (lastOffset == -1)
+          for (record <- batch.asScala) { // 遍历日志的消息
+            if (lastOffset == -1) // 记录上次循环处理的offset
               lastOffset = record.offset
             else if (record.offset != lastOffset + 1) {
+              // 如果消息是未压缩的，则需要offset是连续的，若不连续，则需要进行记录
               var nonConsecutivePairsSeq = nonConsecutivePairsForLogFilesMap.getOrElse(file.getAbsolutePath, List[(Long, Long)]())
               nonConsecutivePairsSeq ::= (lastOffset, record.offset)
               nonConsecutivePairsForLogFilesMap.put(file.getAbsolutePath, nonConsecutivePairsSeq)
@@ -270,6 +285,7 @@ object DumpLogSegments {
 
             var prefix = s"${RecordIndent} "
             if (!skipRecordMetadata) {
+              // 输出消息的相关信息
               print(s"${prefix}offset: ${record.offset}" +
                   s" keySize: ${record.keySize} valueSize: ${record.valueSize} ${batch.timestampType}: ${record.timestamp}" +
                   s" baseOffset: ${batch.baseOffset} lastOffset: ${batch.lastOffset} baseSequence: ${batch.baseSequence}" +
@@ -297,16 +313,19 @@ object DumpLogSegments {
               }
             }
             if (printContents && !batch.isControlBatch) {
+              // 解析消息
               val (key, payload) = parser.parse(record)
-              key.foreach { key =>
+              key.foreach { key => // 输出消息的key
                 print(s"${prefix}key: $key")
                 prefix = " "
               }
+              // 输出消息的value
               payload.foreach(payload => print(s" payload: $payload"))
             }
             println()
           }
         }
+        // 记录已通过验证的字节数
         validBytes += batch.sizeInBytes
       }
       val trailingBytes = fileRecords.sizeInBytes - validBytes

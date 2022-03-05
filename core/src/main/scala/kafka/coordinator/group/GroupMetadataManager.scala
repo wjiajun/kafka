@@ -207,8 +207,10 @@ class GroupMetadataManager(brokerId: Int,
   // 位移主题某个特定分区 Leader 副本所在的 Broker 被选定为指定消费者组的 Coordinator。  特定分区计算: 消费者组名哈希值与位移主题分区数求模的绝对值结果，就是该消费者组要写入位移主题的目标分区
   def partitionFor(groupId: String): Int = Utils.abs(groupId.hashCode) % groupMetadataTopicPartitionCount
 
+  // 检测当前GroupCoordinator是否管理指定的Consumer Group
   def isGroupLocal(groupId: String): Boolean = isPartitionOwned(partitionFor(groupId))
 
+  // 检测指定的group对应的Offsets Topic分区是否还处于加载中
   def isGroupLoading(groupId: String): Boolean = isPartitionLoading(partitionFor(groupId))
 
   def isLoading: Boolean = inLock(partitionLock) { loadingPartitions.nonEmpty }
@@ -285,7 +287,7 @@ class GroupMetadataManager(brokerId: Int,
         val timestamp = time.milliseconds()
         // 构建注册消息的Key
         val key = GroupMetadataManager.groupMetadataKey(group.groupId)
-        // 构建注册消息的Value
+        // 构建注册消息的Value(对应group的分配结果)
         val value = GroupMetadataManager.groupMetadataValue(group, groupAssignment, interBrokerProtocolVersion)
 
         // 使用Key和Value构建待写入消息集合
@@ -297,7 +299,7 @@ class GroupMetadataManager(brokerId: Int,
           builder.build()
         }
 
-        // 计算要写入的目标分区
+        // 计算要写入的目标分区(group 对应的offset topic 分区)
         val groupMetadataPartition = new TopicPartition(Topic.GROUP_METADATA_TOPIC_NAME, partitionFor(group.groupId))
         val groupMetadataRecords = Map(groupMetadataPartition -> records)
         val generationId = group.generationId
@@ -581,6 +583,7 @@ class GroupMetadataManager(brokerId: Int,
             topicPartition -> partitionData
           }.toMap
         } else {
+          // 查找指定分区集合的最近提交offset
           val topicPartitions = topicPartitionsOpt.getOrElse(group.allOffsets.keySet)
 
           topicPartitions.map { topicPartition =>
@@ -927,7 +930,7 @@ class GroupMetadataManager(brokerId: Int,
         // we need to guard the group removal in cache in the loading partition lock
         // to prevent coordinator's check-and-get-group race condition
         // 移除ownedPartitions中特定位移主题分区记录
-        ownedPartitions.remove(offsetsPartition)
+        ownedPartitions.remove(offsetsPartition) // 标识当前GroupCoordinator不再管理其对应的consumer group
         loadingPartitions.remove(offsetsPartition)
 
         // 遍历所有消费者组信息

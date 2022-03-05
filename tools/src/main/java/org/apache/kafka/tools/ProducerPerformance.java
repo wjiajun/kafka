@@ -52,6 +52,7 @@ public class ProducerPerformance {
     }
     
     void start(String[] args) throws IOException {
+        // Argparse4是Python argparse命令行解析器的Java版本，在新版本的ArgumentParser中使用此工具包完成命令行参数的解析和验证
         ArgumentParser parser = argParser();
 
         try {
@@ -87,12 +88,14 @@ public class ProducerPerformance {
                 producer.initTransactions();
 
             /* setup perf test */
+            // 根据record-size参数创建测试消息的负载
             byte[] payload = null;
             if (recordSize != null) {
                 payload = new byte[recordSize];
             }
             Random random = new Random(0);
             ProducerRecord<byte[], byte[]> record;
+            // 创建Stats对象，用于各个指标的统计，其中numRecords指定了生产消息的个数
             Stats stats = new Stats(numRecords, 5000);
             long startMs = System.currentTimeMillis();
 
@@ -102,6 +105,7 @@ public class ProducerPerformance {
             long transactionStartTime = 0;
             for (long i = 0; i < numRecords; i++) {
 
+                // 随机生成字节填充消息的负载
                 payload = generateRandomPayload(recordSize, payloadByteList, payload, random);
 
                 if (transactionsEnabled && currentTransactionSize == 0) {
@@ -113,6 +117,7 @@ public class ProducerPerformance {
 
                 long sendStartMs = System.currentTimeMillis();
                 Callback cb = stats.nextCompletion(sendStartMs, payload.length, stats);
+                // 发送消息，相关的统计工作在callback中完成
                 producer.send(record, cb);
 
                 currentTransactionSize++;
@@ -133,7 +138,7 @@ public class ProducerPerformance {
                 producer.close();
 
                 /* print final results */
-                stats.printTotal();
+                stats.printTotal(); // 打印统计的信息
             } else {
                 // Make sure all messages are sent before printing out the stats and the metrics
                 // We need to do this in a different branch for now since tests/kafkatest/sanity_checks/test_performance_services.py
@@ -326,21 +331,21 @@ public class ProducerPerformance {
     }
 
     private static class Stats {
-        private long start;
-        private long windowStart;
-        private int[] latencies;
-        private int sampling;
-        private int iteration;
+        private long start;// 开始测试的时间戳
+        private long windowStart;// 当前时间窗口发送的起始时间戳
+        private int[] latencies;// 每个样本的延迟
+        private int sampling;// 样本个数，样本个数和指定发送的消息数量有关，默认是500000为一个样本。
+        private int iteration;// 迭代次数
         private int index;
-        private long count;
-        private long bytes;
-        private int maxLatency;
-        private long totalLatency;
-        private long windowCount;
-        private int windowMaxLatency;
-        private long windowTotalLatency;
-        private long windowBytes;
-        private long reportingInterval;
+        private long count;// 记录发送消息的总数
+        private long bytes;// 记录发送消息的总字节数
+        private int maxLatency;// 记录发出消息到对应响应之间的延迟的最大值
+        private long totalLatency;// 记录总延迟时间
+        private long windowCount;// 当前时间窗口发送的消息个数
+        private int windowMaxLatency;// 记录当前时间创建的最大时延
+        private long windowTotalLatency;// 记录当前窗口延时的总时长
+        private long windowBytes;// 记录当前创建发送的总字节数
+        private long reportingInterval;// 保存两次输出之间的时间间隔
 
         public Stats(long numRecords, int reportingInterval) {
             this.start = System.currentTimeMillis();
@@ -368,14 +373,15 @@ public class ProducerPerformance {
             this.windowBytes += bytes;
             this.windowTotalLatency += latency;
             this.windowMaxLatency = Math.max(windowMaxLatency, latency);
-            if (iter % this.sampling == 0) {
+            if (iter % this.sampling == 0) {// 选择样本更新latencies值
                 this.latencies[index] = latency;
                 this.index++;
             }
             /* maybe report the recent perf */
+            // 检测是否需要结束当前窗口，并开启新窗口
             if (time - windowStart >= reportingInterval) {
-                printWindow();
-                newWindow();
+                printWindow();// 输出当前窗口中记录的信息
+                newWindow();// 清空window字段，开启下一个窗口的记录
             }
         }
 
@@ -449,7 +455,8 @@ public class ProducerPerformance {
 
         public void onCompletion(RecordMetadata metadata, Exception exception) {
             long now = System.currentTimeMillis();
-            int latency = (int) (now - start);
+            int latency = (int) (now - start);// 计算消息延迟
+            // 调用Stats.record方法进行记录
             this.stats.record(iteration, latency, bytes, now);
             if (exception != null)
                 exception.printStackTrace();

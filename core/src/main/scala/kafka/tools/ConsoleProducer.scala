@@ -38,16 +38,20 @@ object ConsoleProducer {
   def main(args: Array[String]): Unit = {
 
     try {
-        val config = new ProducerConfig(args)
+        val config = new ProducerConfig(args)// 读取命令行参数并进行解析
+        // 创建LineMessageReader对象
         val reader = Class.forName(config.readerClass).getDeclaredConstructor().newInstance().asInstanceOf[MessageReader]
+        // 初始化LineMessageReader对象
         reader.init(System.in, getReaderProps(config))
 
         val producer = new KafkaProducer[Array[Byte], Array[Byte]](producerProps(config))
 
+      // 添加关闭钩子
     Exit.addShutdownHook("producer-shutdown-hook", producer.close)
 
         var record: ProducerRecord[Array[Byte], Array[Byte]] = null
         do {
+          // 读取控制台内容，然后发送消息
           record = reader.readMessage()
           if (record != null)
             send(producer, record, config.sync)

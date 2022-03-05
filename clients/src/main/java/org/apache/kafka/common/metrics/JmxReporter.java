@@ -139,9 +139,9 @@ public class JmxReporter implements MetricsReporter {
     @Override
     public void metricChange(KafkaMetric metric) {
         synchronized (LOCK) {
-            String mbeanName = addAttribute(metric);
+            String mbeanName = addAttribute(metric);// 添加KafkaMetric
             if (mbeanName != null && mbeanPredicate.test(mbeanName)) {
-                reregister(mbeans.get(mbeanName));
+                reregister(mbeans.get(mbeanName));// 重新注册KafkaMBean
             }
         }
     }
@@ -173,7 +173,7 @@ public class JmxReporter implements MetricsReporter {
     private String addAttribute(KafkaMetric metric) {
         try {
             MetricName metricName = metric.metricName();
-            String mBeanName = getMBeanName(prefix, metricName);
+            String mBeanName = getMBeanName(prefix, metricName);// 获取KafkaMBean名称
             if (!this.mbeans.containsKey(mBeanName))
                 mbeans.put(mBeanName, new KafkaMbean(mBeanName));
             KafkaMbean mbean = this.mbeans.get(mBeanName);
@@ -190,9 +190,10 @@ public class JmxReporter implements MetricsReporter {
      */
     static String getMBeanName(String prefix, MetricName metricName) {
         StringBuilder mBeanName = new StringBuilder();
-        mBeanName.append(prefix);
-        mBeanName.append(":type=");
+        mBeanName.append(prefix);// 前缀，服务端默认是kafka.server
+        mBeanName.append(":type=");// MetricName中的group字段
         mBeanName.append(metricName.group());
+        // MetricName中的tags集合
         for (Map.Entry<String, String> entry : metricName.tags().entrySet()) {
             if (entry.getKey().length() <= 0 || entry.getValue().length() <= 0)
                 continue;
@@ -222,8 +223,9 @@ public class JmxReporter implements MetricsReporter {
     }
 
     private void reregister(KafkaMbean mbean) {
-        unregister(mbean);
+        unregister(mbean);// 先取消KafkaMBean的注册
         try {
+            // 调用MBeanServer.registerMBean()方法重新注册
             ManagementFactory.getPlatformMBeanServer().registerMBean(mbean, mbean.name());
         } catch (JMException e) {
             throw new KafkaException("Error registering mbean " + mbean.name(), e);
@@ -231,7 +233,8 @@ public class JmxReporter implements MetricsReporter {
     }
 
     private static class KafkaMbean implements DynamicMBean {
-        private final ObjectName objectName;
+        private final ObjectName objectName;// MBean名称
+        // 保存了添加的KafkaMetric对象
         private final Map<String, KafkaMetric> metrics;
 
         KafkaMbean(String mbeanName) throws MalformedObjectNameException {

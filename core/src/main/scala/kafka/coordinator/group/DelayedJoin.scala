@@ -30,6 +30,9 @@ import scala.math.{max, min}
  * When the operation has expired, any known members that have not requested to re-join
  * the group are marked as failed, and complete this operation to proceed rebalance with
  * the rest of the group.
+ *
+ * 等待Consumer Group中所有的消费者发送JoinGroupRequest申请加入。
+ * 每当处理完新收到的JoinGroupRequest，都会检测DelayedJoin是否能完成。
  */
 private[group] class DelayedJoin(
   coordinator: GroupCoordinator,

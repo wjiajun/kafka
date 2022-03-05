@@ -1385,6 +1385,7 @@ class KafkaApis(val requestChannel: RequestChannel, // 请求通道
       trace(s"Sending offset fetch response $offsetFetchResponse for correlation id ${header.correlationId} to client ${header.clientId}.")
       offsetFetchResponse
     }
+    // 将offsetFetchResponse放入ResponseChannel中等待发送
     requestHelper.sendResponseMaybeThrottle(request, createResponse)
   }
 
@@ -1681,6 +1682,7 @@ class KafkaApis(val requestChannel: RequestChannel, // 请求通道
       val protocols = joinGroupRequest.data.protocols.valuesList.asScala.map(protocol =>
         (protocol.name, protocol.metadata)).toList
 
+      // 将joinGroupRequest交给groupCoordinator处理
       groupCoordinator.handleJoinGroup(
         joinGroupRequest.data.groupId,
         joinGroupRequest.data.memberId,

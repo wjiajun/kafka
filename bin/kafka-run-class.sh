@@ -27,11 +27,13 @@ else
   CYGWIN=0
 fi
 
+# 检测$INCLUDE_TEST_JARS变量是否为空
 if [ -z "$INCLUDE_TEST_JARS" ]; then
   INCLUDE_TEST_JARS=false
 fi
 
 # Exclude jars not necessary for running commands.
+# 检测classpath是否包含指定文件
 regex="(-(test|test-sources|src|scaladoc|javadoc)\.jar|jar.asc)$"
 should_include_file() {
   if [ "$INCLUDE_TEST_JARS" = true ]; then
@@ -45,6 +47,7 @@ should_include_file() {
   fi
 }
 
+# 获取脚本目录的上一层目录，即base_dir指向的根目录
 base_dir=$(dirname $0)/..
 
 if [ -z "$SCALA_VERSION" ]; then
@@ -205,6 +208,7 @@ if [ -z "$CLASSPATH" ] ; then
   exit 1
 fi
 
+# 检测$base_dir下的多个目录，根据should_include_file函数设置CLASSPATH
 # JMX settings
 if [ -z "$KAFKA_JMX_OPTS" ]; then
   KAFKA_JMX_OPTS="-Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.authenticate=false  -Dcom.sun.management.jmxremote.ssl=false "
@@ -215,6 +219,7 @@ if [  $JMX_PORT ]; then
   KAFKA_JMX_OPTS="$KAFKA_JMX_OPTS -Dcom.sun.management.jmxremote.port=$JMX_PORT "
 fi
 
+# 设置日志文件和索引文件存放地址
 # Log directory to use
 if [ "x$LOG_DIR" = "x" ]; then
   LOG_DIR="$base_dir/logs"
@@ -264,17 +269,20 @@ if [ "x$KAFKA_DEBUG" != "x" ]; then
 fi
 
 # Which java to use
+# 检测JAVA_HOME环境变量
 if [ -z "$JAVA_HOME" ]; then
   JAVA="java"
 else
   JAVA="$JAVA_HOME/bin/java"
 fi
 
+# 配置JVM内存
 # Memory options
 if [ -z "$KAFKA_HEAP_OPTS" ]; then
   KAFKA_HEAP_OPTS="-Xmx256M"
 fi
 
+# JVM优化配置
 # JVM performance options
 # MaxInlineLevel=15 is the default since JDK 14 and can be removed once older JDKs are no longer supported
 if [ -z "$KAFKA_JVM_PERFORMANCE_OPTS" ]; then
@@ -306,6 +314,7 @@ while [ $# -gt 0 ]; do
 done
 
 # GC options
+# 调整JVM GC相关的参数
 GC_FILE_SUFFIX='-gc.log'
 GC_LOG_FILE_NAME=''
 if [ "x$GC_LOG_ENABLED" = "xtrue" ]; then
@@ -336,6 +345,7 @@ CLASSPATH=${CLASSPATH#:}
 (( CYGWIN )) && CLASSPATH=$(cygpath --path --mixed "${CLASSPATH}")
 
 # Launch mode
+# 根据DAEMON_MODE的值，决定是否后台启动
 if [ "x$DAEMON_MODE" = "xtrue" ]; then
   nohup "$JAVA" $KAFKA_HEAP_OPTS $KAFKA_JVM_PERFORMANCE_OPTS $KAFKA_GC_LOG_OPTS $KAFKA_JMX_OPTS $KAFKA_LOG4J_OPTS -cp "$CLASSPATH" $KAFKA_OPTS "$@" > "$CONSOLE_OUTPUT_FILE" 2>&1 < /dev/null &
 else

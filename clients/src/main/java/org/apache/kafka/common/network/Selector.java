@@ -480,6 +480,7 @@ public class Selector implements Selectable, AutoCloseable {
         // 等待I/O事件发生
         int numReadyKeys = select(timeout);
         long endSelect = time.nanoseconds();
+        // 调用selectTime.record方法，记录select方法的阻塞时间
         this.sensors.selectTime.record(endSelect - startSelect, time.milliseconds());
 
         if (numReadyKeys > 0 || !immediatelyConnectedKeys.isEmpty() || dataInBuffers) {
@@ -505,7 +506,9 @@ public class Selector implements Selectable, AutoCloseable {
             madeReadProgressLastPoll = true; //no work is also "progress"
         }
 
+        // 记录io操作的结束时间
         long endIo = time.nanoseconds();
+        // 记录io的耗时
         this.sensors.ioTime.record(endIo - endSelect, time.milliseconds());
 
         // Close channels that were delayed and are now ready to be closed
@@ -549,6 +552,7 @@ public class Selector implements Selectable, AutoCloseable {
                     if (channel.finishConnect()) {
                         // 添加节点到已连接的集合中
                         this.connected.add(nodeId);
+                        // 记录连接创建数
                         this.sensors.connectionCreated.record();
 
                         SocketChannel socketChannel = (SocketChannel) key.channel();
@@ -668,7 +672,7 @@ public class Selector implements Selectable, AutoCloseable {
     // package-private for testing
     void write(KafkaChannel channel) throws IOException {
         String nodeId = channel.id();
-        long bytesSent = channel.write();
+        long bytesSent = channel.write();// 向channel写入请求
         NetworkSend send = channel.maybeCompleteSend();
         // We may complete the send with bytesSent < 1 if `TransportLayer.hasPendingWrites` was true and `channel.write()`
         // caused the pending writes to be written to the socket channel buffer
@@ -677,8 +681,9 @@ public class Selector implements Selectable, AutoCloseable {
             long currentTimeMs = time.milliseconds();
             if (bytesSent > 0)
                 this.sensors.recordBytesSent(nodeId, bytesSent, currentTimeMs);
-            if (send != null) {
-                this.completedSends.add(send);
+            if (send != null) {// 成功发送一个完整的请求
+                this.completedSends.add(send);// 添加到completedSends集合等待后续处理
+                // 调用byteSends记录
                 this.sensors.recordCompletedSend(nodeId, send.size(), currentTimeMs);
             }
         }
@@ -983,7 +988,7 @@ public class Selector implements Selectable, AutoCloseable {
         try {
             immediatelyConnectedKeys.remove(key);
             keysWithBufferedRead.remove(key);
-            channel.close();
+            channel.close();// 连接关闭
         } catch (IOException e) {
             log.error("Exception closing connection to node {}:", channel.id(), e);
         } finally {
@@ -991,6 +996,7 @@ public class Selector implements Selectable, AutoCloseable {
             key.attach(null);
         }
 
+        // 记录连接关闭数
         this.sensors.connectionClosed.record();
         this.explicitlyMutedChannels.remove(channel);
         if (notifyDisconnect)
@@ -1145,7 +1151,7 @@ public class Selector implements Selectable, AutoCloseable {
 
     class SelectorMetrics implements AutoCloseable {
         private final Metrics metrics;
-        private final Map<String, String> metricTags;
+        private final Map<String, String> metricTags;// 创建MetricName时使用的tags集合，会成为MBean名称的一部分
         private final boolean metricsPerConnection;
         private final String metricGrpName;
         private final String perConnectionMetricGrpName;
@@ -1180,17 +1186,22 @@ public class Selector implements Selectable, AutoCloseable {
             this.perConnectionMetricGrpName = metricGrpPrefix + "-node-metrics";
             StringBuilder tagsSuffix = new StringBuilder();
 
+            // 使用tags集合组装成字符串，假设连接的broker id为1，此值为broker-1，下面所有sensor都会将此值作为name一部分
+            // sensor都会将此值作为name一部分
             for (Map.Entry<String, String> tag: metricTags.entrySet()) {
                 tagsSuffix.append(tag.getKey());
                 tagsSuffix.append("-");
                 tagsSuffix.append(tag.getValue());
             }
 
+            // 创建sensor对象
             this.connectionClosed = sensor("connections-closed:" + tagsSuffix);
+            // 添加rate记录每秒连接的关闭数
             this.connectionClosed.add(createMeter(metrics, metricGrpName, metricTags,
                     "connection-close", "connections closed"));
 
             this.connectionCreated = sensor("connections-created:" + tagsSuffix);
+            // 记录每秒连接的创建数
             this.connectionCreated.add(createMeter(metrics, metricGrpName, metricTags,
                     "connection-creation", "new connections established"));
 
@@ -1218,6 +1229,7 @@ public class Selector implements Selectable, AutoCloseable {
                     "failed-reauthentication", "failed re-authentication of connections"));
 
             this.reauthenticationLatency = sensor("reauthentication-latency:" + tagsSuffix);
+            // 创建MetricName
             MetricName reauthenticationLatencyMaxMetricName = metrics.metricName("reauthentication-latency-max",
                     metricGrpName, "The max latency observed due to re-authentication",
                     metricTags);
@@ -1227,11 +1239,13 @@ public class Selector implements Selectable, AutoCloseable {
                     metricTags);
             this.reauthenticationLatency.add(reauthenticationLatencyAvgMetricName, new Avg());
 
+            // 记录所有连接每秒执行的读写总数
             this.bytesTransferred = sensor("bytes-sent-received:" + tagsSuffix);
             bytesTransferred.add(createMeter(metrics, metricGrpName, metricTags, new WindowedCount(),
                     "network-io", "network operations (reads or writes) on all connections"));
 
             this.bytesSent = sensor("bytes-sent:" + tagsSuffix, bytesTransferred);
+            // 记录平均每秒发送的请求总数
             this.bytesSent.add(createMeter(metrics, metricGrpName, metricTags,
                     "outgoing-byte", "outgoing bytes sent to all servers"));
 
@@ -1239,12 +1253,13 @@ public class Selector implements Selectable, AutoCloseable {
             this.requestsSent.add(createMeter(metrics, metricGrpName, metricTags, new WindowedCount(),
                     "request", "requests sent"));
             MetricName metricName = metrics.metricName("request-size-avg", metricGrpName, "The average size of requests sent.", metricTags);
-            this.requestsSent.add(metricName, new Avg());
+            this.requestsSent.add(metricName, new Avg());// 记录请求平均的平均大小
             metricName = metrics.metricName("request-size-max", metricGrpName, "The maximum size of any request sent.", metricTags);
-            this.requestsSent.add(metricName, new Max());
+            this.requestsSent.add(metricName, new Max());// 记录请求的最大长度
 
-            this.bytesReceived = sensor("bytes-received:" + tagsSuffix, bytesTransferred);
-            this.bytesReceived.add(createMeter(metrics, metricGrpName, metricTags,
+            this.bytesReceived = sensor("bytes-received:" + tagsSuffix, bytesTransferred);// 指定bytesTransferred为父sensor
+            // 记录每秒收到的请求数
+            this.bytesReceived.add(createMeter(metrics, metricGrpName, metricTags, // 记录每秒收到的字节数
                     "incoming-byte", "bytes read off all sockets"));
 
             this.responsesReceived = sensor("responses-received:" + tagsSuffix);
@@ -1252,15 +1267,19 @@ public class Selector implements Selectable, AutoCloseable {
                     new WindowedCount(), "response", "responses received"));
 
             this.selectTime = sensor("select-time:" + tagsSuffix);
+            // 记录每秒select()方法次数
             this.selectTime.add(createMeter(metrics, metricGrpName, metricTags,
                     new WindowedCount(), "select", "times the I/O layer checked for new I/O to perform"));
             metricName = metrics.metricName("io-wait-time-ns-avg", metricGrpName, "The average length of time the I/O thread spent waiting for a socket ready for reads or writes in nanoseconds.", metricTags);
             this.selectTime.add(metricName, new Avg());
+            // 记录每秒select()方法平均阻塞时间
             this.selectTime.add(createIOThreadRatioMeter(metrics, metricGrpName, metricTags, "io-wait", "waiting"));
 
             this.ioTime = sensor("io-time:" + tagsSuffix);
             metricName = metrics.metricName("io-time-ns-avg", metricGrpName, "The average length of time for I/O per select call in nanoseconds.", metricTags);
+            // 记录I/O平均时长
             this.ioTime.add(metricName, new Avg());
+            // 记录I/O时间占总时间的时长
             this.ioTime.add(createIOThreadRatioMeter(metrics, metricGrpName, metricTags, "io", "doing I/O"));
 
             this.connectionsByCipher = new IntGaugeSuite<>(log, "sslCiphers", metrics,
@@ -1283,6 +1302,7 @@ public class Selector implements Selectable, AutoCloseable {
 
             metricName = metrics.metricName("connection-count", metricGrpName, "The current number of active connections.", metricTags);
             topLevelMetricNames.add(metricName);
+            // 直接向Metrics添加匿名Measurable，用来记录连接数
             this.metrics.addMetric(metricName, (config, now) -> channels.size());
         }
 

@@ -61,7 +61,7 @@ object Server {
     kafkaConfig: KafkaConfig
   ): MetricConfig = {
     new MetricConfig()
-      .samples(kafkaConfig.metricNumSamples)
+      .samples(kafkaConfig.metricNumSamples) // 默认2
       .recordLevel(Sensor.RecordingLevel.forName(kafkaConfig.metricRecordingLevel))
       .timeWindow(kafkaConfig.metricSampleWindowMs, TimeUnit.MILLISECONDS)
   }

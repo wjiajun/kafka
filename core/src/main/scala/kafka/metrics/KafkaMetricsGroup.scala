@@ -46,13 +46,13 @@ trait KafkaMetricsGroup extends Logging {
 
     val nameBuilder: StringBuilder = new StringBuilder
 
-    nameBuilder.append(group)
+    nameBuilder.append(group)// 第一部分group
 
-    nameBuilder.append(":type=")
+    nameBuilder.append(":type=")// 第二部分 type
 
     nameBuilder.append(typeName)
 
-    if (name.length > 0) {
+    if (name.length > 0) { // 第三部分name
       nameBuilder.append(",name=")
       nameBuilder.append(name)
     }
