@@ -22,14 +22,13 @@ import java.util.concurrent.locks.ReentrantLock
 import java.util.concurrent.{CompletableFuture, TimeUnit}
 
 import kafka.cluster.Broker.ServerInfo
-import kafka.log.LogConfig
 import kafka.metrics.{KafkaMetricsGroup, KafkaYammerMetrics, LinuxIoMetricsCollector}
-import kafka.network.SocketServer
+import kafka.network.{DataPlaneAcceptor, SocketServer}
 import kafka.raft.RaftManager
 import kafka.security.CredentialProvider
+import kafka.server.KafkaConfig.{AlterConfigPolicyClassNameProp, CreateTopicPolicyClassNameProp}
 import kafka.server.QuotaFactory.QuotaManagers
 import kafka.utils.{CoreUtils, Logging}
-import org.apache.kafka.common.config.ConfigResource
 import org.apache.kafka.common.message.ApiMessageType.ListenerType
 import org.apache.kafka.common.metrics.Metrics
 import org.apache.kafka.common.security.scram.internals.ScramMechanism
@@ -37,13 +36,17 @@ import org.apache.kafka.common.security.token.delegation.internals.DelegationTok
 import org.apache.kafka.common.utils.{LogContext, Time}
 import org.apache.kafka.common.{ClusterResource, Endpoint}
 import org.apache.kafka.controller.{Controller, QuorumController, QuorumControllerMetrics}
-import org.apache.kafka.metadata.VersionRange
+import org.apache.kafka.metadata.{KafkaConfigSchema, VersionRange}
 import org.apache.kafka.raft.RaftConfig
 import org.apache.kafka.raft.RaftConfig.AddressSpec
 import org.apache.kafka.server.authorizer.Authorizer
 import org.apache.kafka.server.common.ApiMessageAndVersion
+import org.apache.kafka.common.config.ConfigException
+import org.apache.kafka.metadata.authorizer.ClusterMetadataAuthorizer
+import org.apache.kafka.server.policy.{AlterConfigPolicy, CreateTopicPolicy}
 
 import scala.jdk.CollectionConverters._
+import scala.compat.java8.OptionConverters._
 
 /**
  * A Kafka controller that runs in KRaft (Kafka Raft) mode.
@@ -55,7 +58,8 @@ class ControllerServer(
   val time: Time,
   val metrics: Metrics,
   val threadNamePrefix: Option[String],
-  val controllerQuorumVotersFuture: CompletableFuture[util.Map[Integer, AddressSpec]]
+  val controllerQuorumVotersFuture: CompletableFuture[util.Map[Integer, AddressSpec]],
+  val configSchema: KafkaConfigSchema,
 ) extends Logging with KafkaMetricsGroup {
   import kafka.server.Server._
 
@@ -64,11 +68,13 @@ class ControllerServer(
   var status: ProcessStatus = SHUTDOWN
 
   var linuxIoMetricsCollector: LinuxIoMetricsCollector = null
-  var authorizer: Option[Authorizer] = null
+  @volatile var authorizer: Option[Authorizer] = null
   var tokenCache: DelegationTokenCache = null
   var credentialProvider: CredentialProvider = null
   var socketServer: SocketServer = null
   val socketServerFirstBoundPortFuture = new CompletableFuture[Integer]()
+  var createTopicPolicy: Option[CreateTopicPolicy] = None
+  var alterConfigPolicy: Option[AlterConfigPolicy] = None
   var controller: Controller = null
   val supportedFeatures: Map[String, VersionRange] = Map()
   var quotaManagers: QuotaManagers = null
@@ -87,7 +93,7 @@ class ControllerServer(
     true
   }
 
-  def clusterId: String = metaProperties.clusterId.toString
+  def clusterId: String = metaProperties.clusterId
 
   def startup(): Unit = {
     if (!maybeChangeStatus(SHUTDOWN, STARTING)) return
@@ -137,16 +143,25 @@ class ControllerServer(
         credentialProvider,
         apiVersionManager)
       socketServer.startup(startProcessingRequests = false, controlPlaneListener = None, config.controllerListeners)
-      socketServerFirstBoundPortFuture.complete(socketServer.boundPort(
-        config.controllerListeners.head.listenerName))
 
-      val configDefs = Map(ConfigResource.Type.BROKER -> KafkaConfig.configDef,
-        ConfigResource.Type.TOPIC -> LogConfig.configDefCopy).asJava
+      if (config.controllerListeners.nonEmpty) {
+        socketServerFirstBoundPortFuture.complete(socketServer.boundPort(
+          config.controllerListeners.head.listenerName))
+      } else {
+        throw new ConfigException("No controller.listener.names defined for controller");
+      }
+
       val threadNamePrefixAsString = threadNamePrefix.getOrElse("")
-      controller = new QuorumController.Builder(config.nodeId).
+
+      createTopicPolicy = Option(config.
+        getConfiguredInstance(CreateTopicPolicyClassNameProp, classOf[CreateTopicPolicy]))
+      alterConfigPolicy = Option(config.
+        getConfiguredInstance(AlterConfigPolicyClassNameProp, classOf[AlterConfigPolicy]))
+
+      val controllerBuilder = new QuorumController.Builder(config.nodeId, metaProperties.clusterId).
         setTime(time).
         setThreadNamePrefix(threadNamePrefixAsString).
-        setConfigDefs(configDefs).
+        setConfigSchema(configSchema).
         setRaftClient(raftManager.client).
         setDefaultReplicationFactor(config.defaultReplicationFactor.toShort).
         setDefaultNumPartitions(config.numPartitions.intValue()).
@@ -154,8 +169,14 @@ class ControllerServer(
           TimeUnit.MILLISECONDS)).
         setSnapshotMaxNewRecordBytes(config.metadataSnapshotMaxNewRecordBytes).
         setMetrics(new QuorumControllerMetrics(KafkaYammerMetrics.defaultRegistry())).
-        build()
-
+        setCreateTopicPolicy(createTopicPolicy.asJava).
+        setAlterConfigPolicy(alterConfigPolicy.asJava).
+        setConfigurationValidator(new ControllerConfigurationValidator())
+      authorizer match {
+        case Some(a: ClusterMetadataAuthorizer) => controllerBuilder.setAuthorizer(a)
+        case _ => // nothing to do
+      }
+      controller = controllerBuilder.build()
 
       quotaManagers = QuotaFactory.instantiate(config, metrics, time, threadNamePrefix.getOrElse(""))
       val controllerNodes = RaftConfig.voterConnectionsToNodes(controllerQuorumVotersFuture.get()).asScala
@@ -175,8 +196,8 @@ class ControllerServer(
         controllerApis,
         time,
         config.numIoThreads,
-        s"${SocketServer.DataPlaneMetricPrefix}RequestHandlerAvgIdlePercent",
-        SocketServer.DataPlaneThreadPrefix)
+        s"${DataPlaneAcceptor.MetricPrefix}RequestHandlerAvgIdlePercent",
+        DataPlaneAcceptor.ThreadPrefix)
       socketServer.startProcessingRequests(authorizerFutures)
     } catch {
       case e: Throwable =>
@@ -205,6 +226,8 @@ class ControllerServer(
         CoreUtils.swallow(quotaManagers.shutdown(), this)
       if (controller != null)
         controller.close()
+      createTopicPolicy.foreach(policy => CoreUtils.swallow(policy.close(), this))
+      alterConfigPolicy.foreach(policy => CoreUtils.swallow(policy.close(), this))
       socketServerFirstBoundPortFuture.completeExceptionally(new RuntimeException("shutting down"))
     } catch {
       case e: Throwable =>

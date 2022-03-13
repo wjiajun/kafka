@@ -17,11 +17,10 @@
 
 package kafka.server
 
-import java.util
 import java.util.concurrent.TimeUnit
 
 import kafka.metrics.KafkaMetricsGroup
-import org.apache.kafka.common.{TopicPartition, Uuid}
+import org.apache.kafka.common.TopicIdPartition
 import org.apache.kafka.common.errors._
 import org.apache.kafka.common.protocol.Errors
 import org.apache.kafka.common.replica.ClientMetadata
@@ -49,8 +48,7 @@ case class FetchMetadata(fetchMinBytes: Int,
                          fetchIsolation: FetchIsolation,
                          isFromFollower: Boolean,
                          replicaId: Int,
-                         topicIds: util.Map[String, Uuid],
-                         fetchPartitionStatus: Seq[(TopicPartition, FetchPartitionStatus)]) {
+                         fetchPartitionStatus: Seq[(TopicIdPartition, FetchPartitionStatus)]) {
 
   override def toString = "FetchMetadata(minBytes=" + fetchMinBytes + ", " +
     "maxBytes=" + fetchMaxBytes + ", " +
@@ -68,8 +66,8 @@ class DelayedFetch(delayMs: Long,// 延迟操作的延迟时长
                    replicaManager: ReplicaManager,
                    quota: ReplicaQuota,
                    clientMetadata: Option[ClientMetadata],
-                  // 任务满足条件或到期执行时，在DelayedFetch.onComplete()方法中调用的回调函数，其主要功能是创建FetchResponse并添加到RequestChannels中对应的responseQueue队列中
-                   responseCallback: Seq[(TopicPartition, FetchPartitionData)] => Unit)
+                   // 任务满足条件或到期执行时，在DelayedFetch.onComplete()方法中调用的回调函数，其主要功能是创建FetchResponse并添加到RequestChannels中对应的responseQueue队列中
+                   responseCallback: Seq[(TopicIdPartition, FetchPartitionData)] => Unit)
   extends DelayedOperation(delayMs) {
 
   /**
@@ -94,14 +92,14 @@ class DelayedFetch(delayMs: Long,// 延迟操作的延迟时长
     var accumulatedSize = 0
     // 遍历fetchMetadata中所有Partition的状态
     fetchMetadata.fetchPartitionStatus.foreach {
-      case (topicPartition, fetchStatus) =>
+      case (topicIdPartition, fetchStatus) =>
         // 获取前面读取Log时的结束位置
         val fetchOffset = fetchStatus.startOffsetMetadata
         val fetchLeaderEpoch = fetchStatus.fetchInfo.currentLeaderEpoch
         try {
           if (fetchOffset != LogOffsetMetadata.UnknownOffsetMetadata) {
             // 查找分区leader副本
-            val partition = replicaManager.getPartitionOrException(topicPartition)
+            val partition = replicaManager.getPartitionOrException(topicIdPartition.topicPartition)
             val offsetSnapshot = partition.fetchOffsetSnapshot(fetchLeaderEpoch, fetchMetadata.fetchOnlyLeader)
 
             // 根据FetchRequest请求的来源来设置能读取的最大offset值
@@ -123,7 +121,7 @@ class DelayedFetch(delayMs: Long,// 延迟操作的延迟时长
                 // 此时，endOffsetch出现减小的情况，跑到baseOffset较小的Segment上了
                 // 可能是Leader副本的Log出现了truncate操作
                 // Case F, this can happen when the new fetch operation is on a truncated leader
-                debug(s"Satisfying fetch $fetchMetadata since it is fetching later segments of partition $topicPartition.")
+                debug(s"Satisfying fetch $fetchMetadata since it is fetching later segments of partition $topicIdPartition.")
                 return forceComplete()
               } else if (fetchOffset.onOlderSegment(endOffset)) {
                 // Case F, this can happen when the fetch operation is falling behind the current segment
@@ -132,15 +130,14 @@ class DelayedFetch(delayMs: Long,// 延迟操作的延迟时长
                 //    fetchOffset在较旧的LogSegment，而endOffset在activeSegment
                 debug(s"Satisfying fetch $fetchMetadata immediately since it is fetching older segments.")
                 // We will not force complete the fetch request if a replica should be throttled.
-                if (!replicaManager.shouldLeaderThrottle(quota, partition, fetchMetadata.replicaId))
+                if (!fetchMetadata.isFromFollower || !replicaManager.shouldLeaderThrottle(quota, partition, fetchMetadata.replicaId))
                   return forceComplete()
               } else if (fetchOffset.messageOffset < endOffset.messageOffset) {
                 // we take the partition fetch size as upper bound when accumulating the bytes (skip if a throttled partition)
                 val bytesAvailable = math.min(endOffset.positionDiff(fetchOffset), fetchStatus.fetchInfo.maxBytes)
-                if (!replicaManager.shouldLeaderThrottle(quota, partition, fetchMetadata.replicaId)) {
-                  // endOffset和fetchOffset依然在同一个LogSegment中，且endOffset向后移动，那就尝试计算累计的字节数
+                if (!fetchMetadata.isFromFollower || !replicaManager.shouldLeaderThrottle(quota, partition, fetchMetadata.replicaId))
+                // endOffset和fetchOffset依然在同一个LogSegment中，且endOffset向后移动，那就尝试计算累计的字节数
                   accumulatedSize += bytesAvailable
-                }
               }
             }
 
@@ -148,29 +145,29 @@ class DelayedFetch(delayMs: Long,// 延迟操作的延迟时长
             fetchStatus.fetchInfo.lastFetchedEpoch.ifPresent { fetchEpoch =>
               val epochEndOffset = partition.lastOffsetForLeaderEpoch(fetchLeaderEpoch, fetchEpoch, fetchOnlyFromLeader = false)
               if (epochEndOffset.errorCode != Errors.NONE.code()
-                  || epochEndOffset.endOffset == UNDEFINED_EPOCH_OFFSET
-                  || epochEndOffset.leaderEpoch == UNDEFINED_EPOCH) {
-                debug(s"Could not obtain last offset for leader epoch for partition $topicPartition, epochEndOffset=$epochEndOffset.")
+                || epochEndOffset.endOffset == UNDEFINED_EPOCH_OFFSET
+                || epochEndOffset.leaderEpoch == UNDEFINED_EPOCH) {
+                debug(s"Could not obtain last offset for leader epoch for partition $topicIdPartition, epochEndOffset=$epochEndOffset.")
                 return forceComplete()
               } else if (epochEndOffset.leaderEpoch < fetchEpoch || epochEndOffset.endOffset < fetchStatus.fetchInfo.fetchOffset) {
                 debug(s"Satisfying fetch $fetchMetadata since it has diverging epoch requiring truncation for partition " +
-                  s"$topicPartition epochEndOffset=$epochEndOffset fetchEpoch=$fetchEpoch fetchOffset=${fetchStatus.fetchInfo.fetchOffset}.")
+                  s"$topicIdPartition epochEndOffset=$epochEndOffset fetchEpoch=$fetchEpoch fetchOffset=${fetchStatus.fetchInfo.fetchOffset}.")
                 return forceComplete()
               }
             }
           }
-        } catch {
+        }catch {
           case _: NotLeaderOrFollowerException =>  // Case A or Case B
-            debug(s"Broker is no longer the leader or follower of $topicPartition, satisfy $fetchMetadata immediately")
+            debug(s"Broker is no longer the leader or follower of $topicIdPartition, satisfy $fetchMetadata immediately")
             return forceComplete()
           case _: UnknownTopicOrPartitionException => // Case C
-            debug(s"Broker no longer knows of partition $topicPartition, satisfy $fetchMetadata immediately")
+            debug(s"Broker no longer knows of partition $topicIdPartition, satisfy $fetchMetadata immediately")
             return forceComplete()
           case _: KafkaStorageException => // Case D
-            debug(s"Partition $topicPartition is in an offline log directory, satisfy $fetchMetadata immediately")
+            debug(s"Partition $topicIdPartition is in an offline log directory, satisfy $fetchMetadata immediately")
             return forceComplete()
           case _: FencedLeaderEpochException => // Case E
-            debug(s"Broker is the leader of partition $topicPartition, but the requested epoch " +
+            debug(s"Broker is the leader of partition $topicIdPartition, but the requested epoch " +
               s"$fetchLeaderEpoch is fenced by the latest leader epoch, satisfy $fetchMetadata immediately")
             return forceComplete()
         }
@@ -203,14 +200,13 @@ class DelayedFetch(delayMs: Long,// 延迟操作的延迟时长
       fetchMaxBytes = fetchMetadata.fetchMaxBytes,
       hardMaxBytesLimit = fetchMetadata.hardMaxBytesLimit,
       readPartitionInfo = fetchMetadata.fetchPartitionStatus.map { case (tp, status) => tp -> status.fetchInfo },
-      topicIds = fetchMetadata.topicIds,
       clientMetadata = clientMetadata,
       quota = quota)
 
     // 将读取结果进行封装
     val fetchPartitionData = logReadResults.map { case (tp, result) =>
       val isReassignmentFetch = fetchMetadata.isFromFollower &&
-        replicaManager.isAddingReplica(tp, fetchMetadata.replicaId)
+        replicaManager.isAddingReplica(tp.topicPartition, fetchMetadata.replicaId)
 
       tp -> result.toFetchPartitionData(isReassignmentFetch)
     }

@@ -24,7 +24,7 @@ import kafka.server.{Defaults, KafkaConfig}
 import kafka.utils.{CoreUtils, VerifiableProperties}
 import scala.collection.Seq
 
-class KafkaMetricsConfig[(props: VerifiableProperties) {
+class KafkaMetricsConfig(props: VerifiableProperties) {
 
   /**
    * Comma-separated list of reporter types. These classes should be on the
