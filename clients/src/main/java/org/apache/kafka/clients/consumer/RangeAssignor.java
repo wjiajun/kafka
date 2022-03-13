@@ -67,10 +67,11 @@ import java.util.Map;
  * 针对每个Topic，n=分区数/消费者数量，m=分区数%消费者数量，前m个消费者每个分配n+1个分区，后面的（消费者数量-m）个消费者每个分配n个Partition
  */
 public class RangeAssignor extends AbstractPartitionAssignor {
+    public static final String RANGE_ASSIGNOR_NAME = "range";
 
     @Override
     public String name() {
-        return "range";
+        return RANGE_ASSIGNOR_NAME;
     }
 
     private Map<String, List<MemberInfo>> consumersPerTopic(Map<String, Subscription> consumerMetadata) {

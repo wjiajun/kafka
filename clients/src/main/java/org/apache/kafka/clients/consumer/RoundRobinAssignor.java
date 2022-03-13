@@ -100,6 +100,7 @@ import java.util.TreeSet;
  * 将所有Topic的Partition按照字典序排列，然后对每个Consumer进行轮询分配
  */
 public class RoundRobinAssignor extends AbstractPartitionAssignor {
+    public static final String ROUNDROBIN_ASSIGNOR_NAME = "roundrobin";
 
     @Override
     public Map<String, List<TopicPartition>> assign(Map<String, Integer> partitionsPerTopic,
@@ -140,7 +141,7 @@ public class RoundRobinAssignor extends AbstractPartitionAssignor {
 
     @Override
     public String name() {
-        return "roundrobin";
+        return ROUNDROBIN_ASSIGNOR_NAME;
     }
 
 }

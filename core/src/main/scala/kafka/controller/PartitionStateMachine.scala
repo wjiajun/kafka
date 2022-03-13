@@ -55,7 +55,7 @@ abstract class PartitionStateMachine(controllerContext: ControllerContext) exten
    * This API invokes the OnlinePartition state change on all partitions in either the NewPartition or OfflinePartition
    * state. This is called on a successful controller election and on broker changes
    */
-  def triggerOnlinePartitionStateChange(): Unit = {
+  def triggerOnlinePartitionStateChange(): Map[TopicPartition, Either[Throwable, LeaderAndIsr]] = {
     val partitions = controllerContext.partitionsInStates(Set(OfflinePartition, NewPartition))
     triggerOnlineStateChangeForPartitions(partitions)
   }
@@ -65,7 +65,7 @@ abstract class PartitionStateMachine(controllerContext: ControllerContext) exten
     triggerOnlineStateChangeForPartitions(partitions)
   }
 
-  private def triggerOnlineStateChangeForPartitions(partitions: collection.Set[TopicPartition]): Unit = {
+  private def triggerOnlineStateChangeForPartitions(partitions: collection.Set[TopicPartition]): Map[TopicPartition, Either[Throwable, LeaderAndIsr]] = {
     // try to move all partitions in NewPartition or OfflinePartition state to OnlinePartition state except partitions
     // that belong to topics to be deleted
     val partitionsToTrigger = partitions.filter { partition =>
@@ -306,10 +306,10 @@ class ZkPartitionStateMachine(config: KafkaConfig,
     // 分为两组：有存活副本的分区；无任何存活副本的分区
     val (partitionsWithoutLiveReplicas, partitionsWithLiveReplicas) = liveReplicasPerPartition.partition { case (_, liveReplicas) => liveReplicas.isEmpty }
 
-    partitionsWithoutLiveReplicas.foreach { case (partition, replicas) =>
+    partitionsWithoutLiveReplicas.foreach { case (partition, _) =>
       val failMsg = s"Controller $controllerId epoch ${controllerContext.epoch} encountered error during state change of " +
         s"partition $partition from New to Online, assigned replicas are " +
-        s"[${replicas.mkString(",")}], live brokers are [${controllerContext.liveBrokerIds}]. No assigned " +
+        s"[${controllerContext.partitionReplicaAssignment(partition).mkString(",")}], live brokers are [${controllerContext.liveBrokerIds}]. No assigned " +
         "replica is alive."
       logFailedStateChange(partition, NewPartition, OnlinePartition, new StateChangeFailedException(failMsg))
     }
@@ -494,6 +494,13 @@ class ZkPartitionStateMachine(config: KafkaConfig,
         // 添加LeaderAndISRRequest，待发送
         controllerBrokerRequestBatch.addLeaderAndIsrRequestForBrokers(recipientsPerPartition(partition), partition,
           leaderIsrAndControllerEpoch, replicaAssignment, isNew = false)
+      }
+    }
+
+    if (isDebugEnabled) {
+      updatesToRetry.foreach { partition =>
+        debug(s"Controller failed to elect leader for partition $partition. " +
+          s"Attempted to write state ${adjustedLeaderAndIsrs(partition)}, but failed with bad ZK version. This will be retried.")
       }
     }
 

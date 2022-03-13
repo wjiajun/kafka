@@ -17,7 +17,7 @@
 
 package kafka.server
 
-import kafka.log.Log
+import kafka.log.UnifiedLog
 import org.apache.kafka.common.KafkaException
 
 object LogOffsetMetadata {
@@ -39,9 +39,9 @@ object LogOffsetMetadata {
  *  3. the physical position on the located segment
  */
 // 封装下一条待写入消息的位移值
-case class LogOffsetMetadata(messageOffset: Long, // 高水位值（消息位移值）
-                             segmentBaseOffset: Long = Log.UnknownOffset, // 保存该位移值所在日志段起始位移值
-                             relativePositionInSegment: Int = LogOffsetMetadata.UnknownFilePosition) {// activeSegment的大小 保存该位移值所在日志段的物理磁盘位置
+case class LogOffsetMetadata(messageOffset: Long,
+                             segmentBaseOffset: Long = UnifiedLog.UnknownOffset,
+                             relativePositionInSegment: Int = LogOffsetMetadata.UnknownFilePosition) {
 
   // check if this offset is already on an older segment compared with the given offset
   def onOlderSegment(that: LogOffsetMetadata): Boolean = {
@@ -77,7 +77,7 @@ case class LogOffsetMetadata(messageOffset: Long, // 高水位值（消息位移
 
   // decide if the offset metadata only contains message offset info
   def messageOffsetOnly: Boolean = {
-    segmentBaseOffset == Log.UnknownOffset && relativePositionInSegment == LogOffsetMetadata.UnknownFilePosition
+    segmentBaseOffset == UnifiedLog.UnknownOffset && relativePositionInSegment == LogOffsetMetadata.UnknownFilePosition
   }
 
   override def toString = s"(offset=$messageOffset segment=[$segmentBaseOffset:$relativePositionInSegment])"

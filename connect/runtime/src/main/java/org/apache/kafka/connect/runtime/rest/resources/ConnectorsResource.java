@@ -269,7 +269,7 @@ public class ConnectorsResource {
             FutureCallback<Void> cb = new FutureCallback<>();
             herder.restartConnector(connector, cb);
             completeOrForwardRequest(cb, forwardingPath, "POST", headers, null, forward);
-            return Response.ok().build();
+            return Response.noContent().build();
         }
 
         // In all other cases, submit the async restart request and return connector state
@@ -396,7 +396,7 @@ public class ConnectorsResource {
                             .path(path)
                             .queryParam("forward", recursiveForward);
                     if (queryParameters != null) {
-                        queryParameters.forEach((k, v) ->  uriBuilder.queryParam(k, v));
+                        queryParameters.forEach(uriBuilder::queryParam);
                     }
                     String forwardUrl = uriBuilder.build().toString();
                     log.debug("Forwarding request {} {} {}", forwardUrl, method, body);

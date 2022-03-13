@@ -242,10 +242,8 @@ class ReplicaFetcherThread(name: String,
     }
     val fetchResponse = clientResponse.responseBody.asInstanceOf[FetchResponse]
     if (!fetchSessionHandler.handleResponse(fetchResponse, clientResponse.requestHeader().apiVersion())) {
-      // If we had a topic ID related error, throw it, otherwise return an empty fetch data map.
-      if (fetchResponse.error == Errors.UNKNOWN_TOPIC_ID ||
-          fetchResponse.error == Errors.FETCH_SESSION_TOPIC_ID_ERROR ||
-          fetchResponse.error == Errors.INCONSISTENT_TOPIC_ID) {
+      // If we had a session topic ID related error, throw it, otherwise return an empty fetch data map.
+      if (fetchResponse.error == Errors.FETCH_SESSION_TOPIC_ID_ERROR) {
         throw Errors.forCode(fetchResponse.error().code()).exception()
       } else {
         Map.empty
@@ -292,7 +290,6 @@ class ReplicaFetcherThread(name: String,
   // 构建拉取消息的请求
   override def buildFetch(partitionMap: Map[TopicPartition, PartitionFetchState]): ResultWithPartitions[Option[ReplicaFetch]] = {
     val partitionsWithError = mutable.Set[TopicPartition]()
-    val topicIds = replicaMgr.metadataCache.topicNamesToIds()
 
     val builder = fetchSessionHandler.newBuilder(partitionMap.size, false)
     // 遍历每个分区，将处于可获取状态的分区添加到builder后续统一处理
@@ -306,7 +303,8 @@ class ReplicaFetcherThread(name: String,
             fetchState.lastFetchedEpoch.map(_.asInstanceOf[Integer]).asJava
           else
             Optional.empty[Integer]
-          builder.add(topicPartition, topicIds.getOrDefault(topicPartition.topic(), Uuid.ZERO_UUID), new FetchRequest.PartitionData(
+          builder.add(topicPartition, new FetchRequest.PartitionData(
+            fetchState.topicId.getOrElse(Uuid.ZERO_UUID),
             fetchState.fetchOffset,
             logStartOffset,
             fetchSize,
@@ -328,9 +326,10 @@ class ReplicaFetcherThread(name: String,
       // 构造FETCH请求的Builder对象
       val version: Short = if (fetchRequestVersion >= 13 && !fetchData.canUseTopicIds) 12 else fetchRequestVersion
       val requestBuilder = FetchRequest.Builder
-        .forReplica(version, replicaId, maxWait, minBytes, fetchData.toSend, fetchData.topicIds)
+        .forReplica(version, replicaId, maxWait, minBytes, fetchData.toSend)
         .setMaxBytes(maxBytes)
-        .toForget(fetchData.toForget)
+        .removed(fetchData.toForget)
+        .replaced(fetchData.toReplace)
         .metadata(fetchData.metadata)
       Some(ReplicaFetch(fetchData.sessionPartitions(), requestBuilder))
     }
